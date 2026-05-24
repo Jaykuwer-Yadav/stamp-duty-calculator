@@ -981,6 +981,139 @@
         }
       }
 
+      /* Premium Document Checklist & Upload Styling */
+      .doc-item-wrapper {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        min-height: 48px;
+        justify-content: center;
+      }
+
+      .doc-item-wrapper:hover {
+        border-color: rgba(99, 102, 241, 0.2);
+        background: rgba(255, 255, 255, 0.04);
+        transform: translateY(-1px);
+      }
+
+      .doc-item-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+      }
+
+      .doc-item-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        text-transform: none;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        color: var(--text-main);
+        margin-bottom: 0 !important;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      .doc-item-label span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .upload-trigger-btn {
+        background: rgba(99, 102, 241, 0.1);
+        border: 1px solid rgba(99, 102, 241, 0.25);
+        color: var(--primary);
+        font-family: var(--font-header);
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: all 0.2s;
+        height: 26px;
+        white-space: nowrap;
+      }
+
+      .upload-trigger-btn:hover {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+        box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+      }
+
+      .doc-upload-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: rgba(16, 185, 129, 0.05);
+        border: 1px dashed rgba(16, 185, 129, 0.25);
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        animation: fadeIn 0.3s ease-out;
+        gap: 6px;
+      }
+
+      .doc-upload-info {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #c6f6d5;
+        overflow: hidden;
+        flex: 1;
+      }
+
+      .doc-thumbnail {
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+        object-fit: cover;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        flex-shrink: 0;
+      }
+
+      .doc-filename {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 500;
+      }
+
+      .doc-remove-btn {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        padding: 2px;
+        border-radius: 50%;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+
+      .doc-remove-btn:hover {
+        color: var(--danger);
+        background: rgba(239, 68, 68, 0.1);
+      }
+
+      .print-uploaded-docs-container {
+        display: none;
+      }
+
       /* Print Stylesheet Layout - Optimized White Single-Page A4 Tax Invoice */
       @media print {
         @page {
@@ -1160,6 +1293,45 @@
           border-top: 1px dashed #cbd5e1 !important;
           font-size: 8.5pt !important;
           color: #4a5568 !important;
+        }
+
+        /* Print formatting for uploaded documents */
+        .print-uploaded-docs-container {
+          display: block !important;
+        }
+
+        .print-doc-page {
+          page-break-before: always !important;
+          page-break-inside: avoid !important;
+          text-align: center !important;
+          height: 100% !important;
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: center !important;
+          align-items: center !important;
+          padding: 20px !important;
+          box-sizing: border-box !important;
+        }
+
+        .print-doc-title {
+          font-family: 'Outfit', sans-serif !important;
+          font-size: 14pt !important;
+          font-weight: bold !important;
+          color: #236147 !important;
+          margin-bottom: 20px !important;
+          text-transform: uppercase !important;
+          border-bottom: 1.5pt solid #cbd5e1 !important;
+          padding-bottom: 5px !important;
+          width: 100% !important;
+          text-align: center !important;
+        }
+
+        .print-doc-img {
+          max-width: 100% !important;
+          max-height: 80vh !important;
+          object-fit: contain !important;
+          border: 1px solid #cbd5e1 !important;
+          border-radius: 4px !important;
         }
       }
     </style>
@@ -1516,24 +1688,101 @@
               <div class="form-group">
                 <label>Documents Provided Checklist</label>
                 <div id="docsChecklistGrid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
-                  <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main);">
-                    <input type="checkbox" id="docAadhaar" class="custom-checkbox" onchange="calculateStampDuty()" checked /> Aadhaar Card
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main);">
-                    <input type="checkbox" id="docPAN" class="custom-checkbox" onchange="calculateStampDuty()" checked /> PAN Card
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main);">
-                    <input type="checkbox" id="docElectricity" class="custom-checkbox" onchange="calculateStampDuty()" /> Electricity Bill
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main);">
-                    <input type="checkbox" id="docIndex2" class="custom-checkbox" onchange="calculateStampDuty()" /> Index II
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main);">
-                    <input type="checkbox" id="docRegisteredDeed" class="custom-checkbox" onchange="calculateStampDuty()" /> Registered Deed
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main);">
-                    <input type="checkbox" id="docTaxReceipt" class="custom-checkbox" onchange="calculateStampDuty()" /> Property Tax Receipt
-                  </label>
+                  <!-- Aadhaar Card -->
+                  <div class="doc-item-wrapper" id="wrapper_docAadhaar">
+                    <div class="doc-item-main">
+                      <label class="doc-item-label">
+                        <input type="checkbox" id="docAadhaar" class="custom-checkbox" onchange="toggleDocUpload('docAadhaar')" checked />
+                        <span>Aadhaar Card</span>
+                      </label>
+                      <button type="button" class="upload-trigger-btn" id="upload_btn_docAadhaar" onclick="triggerFileUpload('docAadhaar')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                      </button>
+                      <input type="file" id="file_docAadhaar" style="display: none;" onchange="handleFileUpload(event, 'docAadhaar')" accept="image/*" />
+                    </div>
+                    <div class="doc-upload-status" id="status_docAadhaar" style="display: none;"></div>
+                  </div>
+
+                  <!-- PAN Card -->
+                  <div class="doc-item-wrapper" id="wrapper_docPAN">
+                    <div class="doc-item-main">
+                      <label class="doc-item-label">
+                        <input type="checkbox" id="docPAN" class="custom-checkbox" onchange="toggleDocUpload('docPAN')" checked />
+                        <span>PAN Card</span>
+                      </label>
+                      <button type="button" class="upload-trigger-btn" id="upload_btn_docPAN" onclick="triggerFileUpload('docPAN')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                      </button>
+                      <input type="file" id="file_docPAN" style="display: none;" onchange="handleFileUpload(event, 'docPAN')" accept="image/*" />
+                    </div>
+                    <div class="doc-upload-status" id="status_docPAN" style="display: none;"></div>
+                  </div>
+
+                  <!-- Electricity Bill -->
+                  <div class="doc-item-wrapper" id="wrapper_docElectricity">
+                    <div class="doc-item-main">
+                      <label class="doc-item-label">
+                        <input type="checkbox" id="docElectricity" class="custom-checkbox" onchange="toggleDocUpload('docElectricity')" />
+                        <span>Electricity Bill</span>
+                      </label>
+                      <button type="button" class="upload-trigger-btn" id="upload_btn_docElectricity" style="display: none;" onclick="triggerFileUpload('docElectricity')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                      </button>
+                      <input type="file" id="file_docElectricity" style="display: none;" onchange="handleFileUpload(event, 'docElectricity')" accept="image/*" />
+                    </div>
+                    <div class="doc-upload-status" id="status_docElectricity" style="display: none;"></div>
+                  </div>
+
+                  <!-- Index II -->
+                  <div class="doc-item-wrapper" id="wrapper_docIndex2">
+                    <div class="doc-item-main">
+                      <label class="doc-item-label">
+                        <input type="checkbox" id="docIndex2" class="custom-checkbox" onchange="toggleDocUpload('docIndex2')" />
+                        <span>Index II</span>
+                      </label>
+                      <button type="button" class="upload-trigger-btn" id="upload_btn_docIndex2" style="display: none;" onclick="triggerFileUpload('docIndex2')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                      </button>
+                      <input type="file" id="file_docIndex2" style="display: none;" onchange="handleFileUpload(event, 'docIndex2')" accept="image/*" />
+                    </div>
+                    <div class="doc-upload-status" id="status_docIndex2" style="display: none;"></div>
+                  </div>
+
+                  <!-- Registered Deed -->
+                  <div class="doc-item-wrapper" id="wrapper_docRegisteredDeed">
+                    <div class="doc-item-main">
+                      <label class="doc-item-label">
+                        <input type="checkbox" id="docRegisteredDeed" class="custom-checkbox" onchange="toggleDocUpload('docRegisteredDeed')" />
+                        <span>Registered Deed</span>
+                      </label>
+                      <button type="button" class="upload-trigger-btn" id="upload_btn_docRegisteredDeed" style="display: none;" onclick="triggerFileUpload('docRegisteredDeed')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                      </button>
+                      <input type="file" id="file_docRegisteredDeed" style="display: none;" onchange="handleFileUpload(event, 'docRegisteredDeed')" accept="image/*" />
+                    </div>
+                    <div class="doc-upload-status" id="status_docRegisteredDeed" style="display: none;"></div>
+                  </div>
+
+                  <!-- Property Tax Receipt -->
+                  <div class="doc-item-wrapper" id="wrapper_docTaxReceipt">
+                    <div class="doc-item-main">
+                      <label class="doc-item-label">
+                        <input type="checkbox" id="docTaxReceipt" class="custom-checkbox" onchange="toggleDocUpload('docTaxReceipt')" />
+                        <span>Property Tax Receipt</span>
+                      </label>
+                      <button type="button" class="upload-trigger-btn" id="upload_btn_docTaxReceipt" style="display: none;" onclick="triggerFileUpload('docTaxReceipt')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                      </button>
+                      <input type="file" id="file_docTaxReceipt" style="display: none;" onchange="handleFileUpload(event, 'docTaxReceipt')" accept="image/*" />
+                    </div>
+                    <div class="doc-upload-status" id="status_docTaxReceipt" style="display: none;"></div>
+                  </div>
                 </div>
 
                 <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 6px;">
@@ -1948,7 +2197,112 @@
       <span>Detailed breakdown copied to clipboard!</span>
     </div>
 
-    <script>
+     <script>
+      // Global store for uploaded files: { docId: { name, type, size, base64 } }
+      const uploadedFiles = {};
+
+      // Programmatically trigger hidden file input
+      function triggerFileUpload(docId) {
+        const input = document.getElementById("file_" + docId);
+        if (input) {
+          input.click();
+        }
+      }
+
+      // Toggle showing/hiding of the upload button and clear the uploaded file if unchecked
+      function toggleDocUpload(docId) {
+        const chk = document.getElementById(docId);
+        const btn = document.getElementById("upload_btn_" + docId);
+        
+        if (chk && chk.checked) {
+          if (btn) btn.style.display = "inline-flex";
+        } else {
+          if (btn) btn.style.display = "none";
+          // Clear uploaded file if unchecked
+          removeUploadedFile(docId);
+        }
+        calculateStampDuty();
+      }
+
+      // File uploader handler
+      function handleFileUpload(event, docId) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        // Limit to image types
+        if (!file.type.startsWith('image/')) {
+          alert("Error: Please select a valid image file (PNG, JPG, JPEG, WebP).");
+          event.target.value = "";
+          return;
+        }
+
+        // Limit size to 5MB
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (file.size > maxSize) {
+          alert("Error: File size exceeds the 5MB limit. Please upload a smaller image.");
+          event.target.value = "";
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          // Save to our storage
+          uploadedFiles[docId] = {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            base64: e.target.result
+          };
+
+          // Update UI
+          renderUploadStatus(docId);
+          calculateStampDuty();
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // Render the upload file status (preview image, filename, trash icon)
+      function renderUploadStatus(docId) {
+        const statusDiv = document.getElementById("status_" + docId);
+        if (!statusDiv) return;
+
+        const fileData = uploadedFiles[docId];
+        if (fileData) {
+          statusDiv.style.display = "flex";
+          statusDiv.innerHTML = `
+            <div class="doc-upload-info">
+              <img src="${fileData.base64}" class="doc-thumbnail" alt="Preview" />
+              <span class="doc-filename" title="${fileData.name}">${fileData.name}</span>
+            </div>
+            <button type="button" class="doc-remove-btn" onclick="removeUploadedFile('${docId}')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          `;
+        } else {
+          statusDiv.style.display = "none";
+          statusDiv.innerHTML = "";
+        }
+      }
+
+      // Remove an uploaded file from state
+      function removeUploadedFile(docId) {
+        delete uploadedFiles[docId];
+        
+        // Reset HTML input element
+        const input = document.getElementById("file_" + docId);
+        if (input) {
+          input.value = "";
+        }
+
+        // Reset status preview UI
+        renderUploadStatus(docId);
+        
+        // recalculate
+        calculateStampDuty();
+      }
+
       // Dynamic custom document checklist array
       const customDocuments = [];
 
@@ -1982,6 +2336,16 @@
         const index = customDocuments.indexOf(doc);
         if (index > -1) {
           customDocuments.splice(index, 1);
+          const docId = `customDoc_${index}`;
+          delete uploadedFiles[docId];
+          
+          // Shift files left in uploadedFiles mapping to align with new indices
+          let i = index;
+          while (uploadedFiles[`customDoc_${i+1}`]) {
+            uploadedFiles[`customDoc_${i}`] = uploadedFiles[`customDoc_${i+1}`];
+            delete uploadedFiles[`customDoc_${i+1}`];
+            i++;
+          }
         }
         renderCustomDocuments();
         calculateStampDuty();
@@ -1996,22 +2360,39 @@
         customItems.forEach(el => el.remove());
 
         customDocuments.forEach((doc, idx) => {
-          const label = document.createElement("label");
-          label.className = "custom-doc-item";
-          label.style.cssText = "display: flex; align-items: center; justify-content: space-between; gap: 8px; text-transform: none; font-size: 0.85rem; font-weight: normal; cursor: pointer; color: var(--text-main); background: rgba(99, 102, 241, 0.05); padding: 4px 8px; border-radius: 6px; border: 1px dashed rgba(99, 102, 241, 0.2); position: relative;";
+          const docId = `customDoc_${idx}`;
+          const container = document.createElement("div");
+          container.className = "doc-item-wrapper custom-doc-item";
+          container.id = `wrapper_${docId}`;
           
-          label.innerHTML = `
-            <span style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;">
-              <input type="checkbox" id="customDoc_${idx}" class="custom-checkbox" onchange="calculateStampDuty()" checked />
-              ${doc}
-            </span>
-            <span onclick="event.stopPropagation(); event.preventDefault(); removeCustomDocument('${doc.replace(/'/g, "\\'")}')" style="color: var(--text-muted); cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; transition: color 0.2s;" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </span>
+          container.innerHTML = `
+            <div class="doc-item-main">
+              <label class="doc-item-label">
+                <input type="checkbox" id="${docId}" class="custom-checkbox" onchange="toggleDocUpload('${docId}')" checked />
+                <span title="${doc}">${doc}</span>
+              </label>
+              
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <button type="button" class="upload-trigger-btn" id="upload_btn_${docId}" onclick="triggerFileUpload('${docId}')">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  Upload
+                </button>
+                <input type="file" id="file_${docId}" style="display: none;" onchange="handleFileUpload(event, '${docId}')" accept="image/*" />
+                
+                <span onclick="event.stopPropagation(); event.preventDefault(); removeCustomDocument('${doc.replace(/'/g, "\\'")}')" style="color: var(--text-muted); cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; padding: 4px; border-radius: 50%; transition: all 0.2s;" onmouseover="this.style.color='var(--danger)'; this.style.background='rgba(239, 68, 68, 0.1)'" onmouseout="this.style.color='var(--text-muted)'; this.style.background='transparent'">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <div class="doc-upload-status" id="status_${docId}" style="display: none;"></div>
           `;
-          grid.appendChild(label);
+          grid.appendChild(container);
+          
+          if (uploadedFiles[docId]) {
+            renderUploadStatus(docId);
+          }
         });
       }
 
@@ -2411,6 +2792,61 @@
         // Render visual charts (Grand Total Breakdown)
         const professionalServicesTotal = legalCharges + visitingCharges + policeCharges;
         updateAnalytics(stampDuty, regFee + dhc, professionalServicesTotal, cgst, sgst, grandTotal);
+        
+        // Rebuild print container for PDF print page-breaks
+        updatePrintDocuments();
+      }
+
+      // Rebuild the print container for PDF print page-breaks
+      function updatePrintDocuments() {
+        const printContainer = document.getElementById("printUploadedDocs");
+        if (!printContainer) return;
+
+        printContainer.innerHTML = ""; // Clear existing
+
+        // Standard document checklist mapping
+        const standardDocsMap = {
+          "docAadhaar": "Aadhaar Card",
+          "docPAN": "PAN Card",
+          "docElectricity": "Electricity Bill",
+          "docIndex2": "Index II",
+          "docRegisteredDeed": "Registered Deed",
+          "docTaxReceipt": "Property Tax Receipt"
+        };
+
+        // Add standard checked and uploaded documents
+        Object.keys(standardDocsMap).forEach(id => {
+          const chk = document.getElementById(id);
+          if (chk && chk.checked && uploadedFiles[id]) {
+            const fileData = uploadedFiles[id];
+            const labelText = standardDocsMap[id];
+            
+            const pageDiv = document.createElement("div");
+            pageDiv.className = "print-doc-page";
+            pageDiv.innerHTML = `
+              <div class="print-doc-title">${labelText} - Attached Support Document</div>
+              <img src="${fileData.base64}" class="print-doc-img" alt="${labelText}" />
+            `;
+            printContainer.appendChild(pageDiv);
+          }
+        });
+
+        // Add custom checked and uploaded documents
+        customDocuments.forEach((doc, idx) => {
+          const docId = `customDoc_${idx}`;
+          const chk = document.getElementById(docId);
+          if (chk && chk.checked && uploadedFiles[docId]) {
+            const fileData = uploadedFiles[docId];
+            
+            const pageDiv = document.createElement("div");
+            pageDiv.className = "print-doc-page";
+            pageDiv.innerHTML = `
+              <div class="print-doc-title">${doc} - Attached Support Document</div>
+              <img src="${fileData.base64}" class="print-doc-img" alt="${doc}" />
+            `;
+            printContainer.appendChild(pageDiv);
+          }
+        });
       }
 
       // Update the animated SVG Donut Chart and its Legend details for Grand Total Breakdown
@@ -2637,6 +3073,60 @@
           `;
         }
 
+        // Compile uploaded documents for Word attachment
+        let uploadedDocsHtml = "";
+        const checkedStandardDocs = {
+          "docAadhaar": "Aadhaar Card",
+          "docPAN": "PAN Card",
+          "docElectricity": "Electricity Bill",
+          "docIndex2": "Index II",
+          "docRegisteredDeed": "Registered Deed",
+          "docTaxReceipt": "Property Tax Receipt"
+        };
+
+        let hasUploadedDocs = false;
+        let docsListHtml = "";
+
+        // Standard docs check
+        Object.keys(checkedStandardDocs).forEach(id => {
+          const chk = document.getElementById(id);
+          if (chk && chk.checked && uploadedFiles[id]) {
+            hasUploadedDocs = true;
+            docsListHtml += `
+              <div style="margin-bottom: 30px; page-break-before: always; text-align: center;">
+                <div style="font-size: 14pt; font-weight: bold; color: #236147; border-bottom: 1.5pt solid #236147; padding-bottom: 5px; margin-bottom: 15px; text-transform: uppercase; font-family: 'Outfit', sans-serif;">
+                  ${checkedStandardDocs[id]} - Attached Document
+                </div>
+                <img src="${uploadedFiles[id].base64}" style="max-width: 100%; max-height: 550px; border: 0.5pt solid #e2e8f0; border-radius: 4px;" alt="${checkedStandardDocs[id]}" />
+              </div>
+            `;
+          }
+        });
+
+        // Custom docs check
+        customDocuments.forEach((doc, idx) => {
+          const docId = `customDoc_${idx}`;
+          const chk = document.getElementById(docId);
+          if (chk && chk.checked && uploadedFiles[docId]) {
+            hasUploadedDocs = true;
+            docsListHtml += `
+              <div style="margin-bottom: 30px; page-break-before: always; text-align: center;">
+                <div style="font-size: 14pt; font-weight: bold; color: #236147; border-bottom: 1.5pt solid #236147; padding-bottom: 5px; margin-bottom: 15px; text-transform: uppercase; font-family: 'Outfit', sans-serif;">
+                  ${doc} - Attached Document
+                </div>
+                <img src="${uploadedFiles[docId].base64}" style="max-width: 100%; max-height: 550px; border: 0.5pt solid #e2e8f0; border-radius: 4px;" alt="${doc}" />
+              </div>
+            `;
+          }
+        });
+
+        if (hasUploadedDocs) {
+          uploadedDocsHtml = `
+            <div class="section-title" style="page-break-before: always;">6. Attached Support Documents</div>
+            ${docsListHtml}
+          `;
+        }
+
         const currentDate = new Date().toLocaleDateString('en-IN');
 
         const htmlContent = `
@@ -2824,6 +3314,8 @@
     </tr>
   </table>
 
+  ${uploadedDocsHtml}
+
   <div class="footer">
     Generated via admyproperty.com Stamp Duty & Registration Fee Calculator.<br>
     This estimate is subject to government rules and verification of original documents.
@@ -2870,5 +3362,6 @@
         }
       };
     </script>
+    <div id="printUploadedDocs" class="print-uploaded-docs-container"></div>
   </body>
 </html>
