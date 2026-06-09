@@ -23,6 +23,9 @@
     "androidStatusBar": {
       "hidden": true
     },
+    "androidNavigationBar": {
+      "visible": "never"
+    },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
