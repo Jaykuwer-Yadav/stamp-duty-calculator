@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, db } from '../../firebase';
 import MoneyBackground from '../components/MoneyBackground';
 import { 
@@ -319,6 +320,7 @@ function LoadingOverlay({ activeTheme }: LoadingOverlayProps) {
 }
 
 export default function AppIndex() {
+  const insets = useSafeAreaInsets();
   const [isConnected, setIsConnected] = useState<boolean | null>(true);
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -934,7 +936,7 @@ export default function AppIndex() {
         </View>
       )}
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.scrollContainer, { paddingTop: Math.max(insets.top, 20) + (Platform.OS === 'ios' ? 45 : 30) }]} keyboardShouldPersistTaps="handled">
         {user && profile ? (
           <View style={styles.dashboardContainer}>
             
@@ -1940,6 +1942,8 @@ export default function AppIndex() {
             borderBottomWidth: activeThemeKey === 'minecraft_anime' ? 3 : 0,
             borderBottomColor: '#000000',
             borderColor: activeThemeKey === 'minecraft_anime' ? '#000000' : activeTheme.cardBorder,
+            paddingBottom: Math.max(insets.bottom, 12),
+            height: 60 + Math.max(insets.bottom, 12),
           }
         ]}>
           {[
