@@ -25,7 +25,8 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
-  onAuthStateChanged
+  onAuthStateChanged,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { 
   collection, 
@@ -548,6 +549,22 @@ export default function AppIndex() {
       await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
     } catch (err: any) {
       Alert.alert("Authentication Failed", err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      Alert.alert("Email Required", "Please enter your email address in the Email field first, then click Forgot Password.");
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+      Alert.alert("Password Reset Sent", `A password reset link has been sent to ${email.trim()}. Please check your email inbox.`);
+    } catch (err: any) {
+      Alert.alert("Reset Failed", err.message);
     } finally {
       setAuthLoading(false);
     }
@@ -1796,6 +1813,20 @@ export default function AppIndex() {
                   value={password}
                   onChangeText={setPassword}
                 />
+                <TouchableOpacity 
+                  onPress={handleForgotPassword}
+                  style={{ alignSelf: 'flex-end', marginTop: -8, marginBottom: 4, paddingVertical: 4 }}
+                >
+                  <Text style={{ 
+                    color: activeTheme.primaryColor, 
+                    fontSize: 12, 
+                    fontWeight: '600', 
+                    fontFamily: activeTheme.fontFamily || 'System',
+                    textDecorationLine: 'underline' 
+                  }}>
+                    Forgot Password?
+                  </Text>
+                </TouchableOpacity>
                 <TouchableOpacity 
                   style={[
                     styles.submitBtn, 
