@@ -323,6 +323,25 @@ function LoadingOverlay({ activeTheme }: LoadingOverlayProps) {
   );
 }
 
+function getSafeDateStr(timestamp: any): string {
+  if (!timestamp) return new Date().toISOString();
+  try {
+    if (typeof timestamp.toDate === 'function') {
+      return timestamp.toDate().toISOString();
+    }
+    if (typeof timestamp.seconds === 'number') {
+      return new Date(timestamp.seconds * 1000).toISOString();
+    }
+    const parsed = new Date(timestamp);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  } catch (e) {
+    console.warn("Failed to parse date:", e);
+  }
+  return new Date().toISOString();
+}
+
 export default function AppIndex() {
   const insets = useSafeAreaInsets();
   const [isConnected, setIsConnected] = useState<boolean | null>(true);
@@ -435,7 +454,7 @@ export default function AppIndex() {
           const docRef = doc(db, 'users', currentUser.uid);
           const docSnap = await getDoc(docRef);
           if (docSnap.exists()) {
-            setProfile(docSnap.data() as UserProfile);
+            setProfile({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
           } else {
             console.warn("User profile document not found.");
           }
@@ -490,7 +509,7 @@ export default function AppIndex() {
                   timestamp: data.timestamp,
                   description: data.description || 'Transaction',
                   category: data.category || 'Other',
-                  dateStr: data.timestamp ? new Date(data.timestamp.seconds * 1000).toISOString() : new Date().toISOString()
+                  dateStr: getSafeDateStr(data.timestamp)
                 } as TransactionItem);
               });
               allTransactionsMap[empUid] = empTrans;
@@ -532,7 +551,7 @@ export default function AppIndex() {
             timestamp: data.timestamp,
             description: data.description || 'Transaction',
             category: data.category || 'Other',
-            dateStr: data.timestamp ? new Date(data.timestamp.seconds * 1000).toISOString() : new Date().toISOString()
+            dateStr: getSafeDateStr(data.timestamp)
           } as TransactionItem);
         });
         list.sort((a, b) => new Date(b.dateStr).getTime() - new Date(a.dateStr).getTime());
@@ -858,11 +877,19 @@ export default function AppIndex() {
           style: "destructive", 
           onPress: async () => {
             try {
+              // First delete all transaction records belonging to this user
+              const txsQuery = query(collection(db, "users", targetUid, "transactions"));
+              const txsSnapshot = await getDocs(txsQuery);
+              const deletePromises = txsSnapshot.docs.map(txDoc => deleteDoc(txDoc.ref));
+              await Promise.all(deletePromises);
+
+              // Then delete the user's primary profile document
               await deleteDoc(doc(db, "users", targetUid));
-              Alert.alert("Success", "User account deleted successfully.");
+              
+              Alert.alert("Success", "User account and all associated transaction records deleted successfully.");
               handleCloseUserSheet();
             } catch (err: any) {
-              Alert.alert("Failed", err.message);
+              Alert.alert("Failed to delete user", err.message);
             }
           } 
         }
