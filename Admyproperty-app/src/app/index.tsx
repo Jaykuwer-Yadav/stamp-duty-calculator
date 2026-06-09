@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { StatusBar } from 'expo-status-bar';
 import { 
   StyleSheet, 
   Text, 
@@ -910,11 +911,17 @@ export default function AppIndex() {
   };
 
   if (loading) {
-    return <LoadingOverlay activeTheme={activeTheme} />;
+    return (
+      <>
+        <StatusBar hidden={true} />
+        <LoadingOverlay activeTheme={activeTheme} />
+      </>
+    );
   }
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: activeTheme.background }]}>
+      <StatusBar hidden={true} />
       {/* Background Animated money particles */}
       <MoneyBackground activeThemeKey={activeThemeKey} symbols={activeTheme.moneySymbols} primaryColor={activeTheme.primaryColor} />
 
@@ -1984,8 +1991,10 @@ export default function AppIndex() {
         visible={selectedUserSheet !== null}
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         onRequestClose={handleCloseUserSheet}
       >
+        <StatusBar hidden={true} />
         <View style={[styles.modalOverlay, { backgroundColor: activeTheme.background + 'dd' }]}>
           <View style={[
             styles.modalContent, 
@@ -2111,9 +2120,11 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     flexGrow: 1,
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    paddingTop: Platform.OS === 'ios' ? 95 : 75, // Shift down to keep logo and welcome note away from status bar / top edge
     width: '100%',
-    maxWidth: 550, // Constrain width on wide screens!
+    maxWidth: 550,
     alignSelf: 'center',
   },
   loadingContainer: {
@@ -2177,6 +2188,7 @@ const styles = StyleSheet.create({
   },
   brandContainer: {
     alignItems: 'center',
+    marginTop: 40, // Shift logo and welcome subtitle down inside the card
     marginBottom: 24,
   },
   logo: {
@@ -2249,6 +2261,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 35, // Additional shift down for logo and welcome note
     marginBottom: 10,
     paddingVertical: 10,
   },

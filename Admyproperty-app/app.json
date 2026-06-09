@@ -20,6 +20,9 @@
       },
       "predictiveBackGestureEnabled": false
     },
+    "androidStatusBar": {
+      "hidden": true
+    },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
@@ -31,7 +34,7 @@
         {
           "backgroundColor": "#208AEF",
           "android": {
-            "image": "./assets/images/splash-icon.png",
+            "image": "./assets/images/image.png",
             "imageWidth": 76
           }
         }
