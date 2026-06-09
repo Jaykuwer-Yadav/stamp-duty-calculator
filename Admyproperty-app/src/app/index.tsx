@@ -39,7 +39,9 @@ import {
   orderBy, 
   limit, 
   serverTimestamp,
-  deleteDoc
+  deleteDoc,
+  where,
+  getDocs
 } from 'firebase/firestore';
 
 interface ThemeConfig {
@@ -565,7 +567,23 @@ export default function AppIndex() {
     }
     setAuthLoading(true);
     try {
-      await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+      const userEmail = email.trim().toLowerCase();
+      // Check if user is present in Firestore 'users' collection
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', userEmail));
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        if (Platform.OS === 'web') {
+          alert("User Not Found\n\nNo user account is registered with this email address.");
+        } else {
+          Alert.alert("User Not Found", "No user account is registered with this email address.");
+        }
+        setAuthLoading(false);
+        return;
+      }
+
+      await sendPasswordResetEmail(auth, userEmail);
       if (Platform.OS === 'web') {
         alert(`Check your email!\n\nA password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`);
       } else {
