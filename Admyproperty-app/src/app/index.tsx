@@ -568,21 +568,6 @@ export default function AppIndex() {
     setAuthLoading(true);
     try {
       const userEmail = email.trim().toLowerCase();
-      // Check if user is present in Firestore 'users' collection
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', userEmail));
-      const querySnapshot = await getDocs(q);
-
-      if (querySnapshot.empty) {
-        if (Platform.OS === 'web') {
-          alert("User Not Found\n\nNo user account is registered with this email address.");
-        } else {
-          Alert.alert("User Not Found", "No user account is registered with this email address.");
-        }
-        setAuthLoading(false);
-        return;
-      }
-
       await sendPasswordResetEmail(auth, userEmail);
       if (Platform.OS === 'web') {
         alert(`Check your email!\n\nA password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`);
@@ -593,10 +578,17 @@ export default function AppIndex() {
         );
       }
     } catch (err: any) {
+      let friendlyMessage = err.message;
+      if (err.code === 'auth/user-not-found' || err.message.includes('user-not-found')) {
+        friendlyMessage = "No user account is registered with this email address.";
+      } else if (err.code === 'auth/invalid-email' || err.message.includes('invalid-email')) {
+        friendlyMessage = "Please enter a valid email address.";
+      }
+      
       if (Platform.OS === 'web') {
-        alert(`Reset Failed\n\n${err.message}`);
+        alert(`Reset Failed\n\n${friendlyMessage}`);
       } else {
-        Alert.alert("Reset Failed", err.message);
+        Alert.alert("Reset Failed", friendlyMessage);
       }
     } finally {
       setAuthLoading(false);
