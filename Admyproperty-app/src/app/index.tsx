@@ -26,7 +26,8 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  fetchSignInMethodsForEmail
 } from 'firebase/auth';
 import { 
   collection, 
@@ -329,7 +330,7 @@ export default function AppIndex() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [authLoading, setAuthLoading] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'signin' | 'register'>('signin');
+  const [activeTab, setActiveTab] = useState<'signin' | 'register' | 'forgot'>('signin');
   const [showPassword, setShowPassword] = useState<boolean>(false);
 
   // Input states
@@ -576,9 +577,9 @@ export default function AppIndex() {
   const handleForgotPassword = async () => {
     if (!email) {
       if (Platform.OS === 'web') {
-        alert("Email Required\n\nPlease enter your email address in the Email field first, then click Forgot Password.");
+        alert("Email Required\n\nPlease enter your email address first.");
       } else {
-        Alert.alert("Email Required", "Please enter your email address in the Email field first, then click Forgot Password.");
+        Alert.alert("Email Required", "Please enter your email address first.");
       }
       return;
     }
@@ -593,6 +594,30 @@ export default function AppIndex() {
     setAuthLoading(true);
     try {
       const userEmail = email.trim().toLowerCase();
+
+      // Check if email exists in auth
+      let isRegistered = true;
+      try {
+        const methods = await fetchSignInMethodsForEmail(auth, userEmail);
+        if (methods.length === 0) {
+          isRegistered = false;
+        }
+      } catch (authError: any) {
+        // If email enumeration protection is enabled, it throws admin-restricted-operation.
+        // We will proceed to let the catch block handle the user-not-found exception from sendPasswordResetEmail.
+        console.log("Email existence check bypassed:", authError.message);
+      }
+
+      if (!isRegistered) {
+        if (Platform.OS === 'web') {
+          alert("Not Registered\n\nNot registered! Please register first.");
+        } else {
+          Alert.alert("Not Registered", "Not registered! Please register first.");
+        }
+        setAuthLoading(false);
+        return;
+      }
+
       await sendPasswordResetEmail(auth, userEmail);
       if (Platform.OS === 'web') {
         alert(`Check your email!\n\nA password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`);
@@ -602,10 +627,11 @@ export default function AppIndex() {
           `A password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`
         );
       }
+      setActiveTab('signin'); // Redirect back to Sign In
     } catch (err: any) {
       let friendlyMessage = err.message;
       if (err.code === 'auth/user-not-found' || err.message.includes('user-not-found')) {
-        friendlyMessage = "No user account is registered with this email address.";
+        friendlyMessage = "Not registered! Please register first.";
       } else if (err.code === 'auth/invalid-email' || err.message.includes('invalid-email')) {
         friendlyMessage = "Please enter a valid email address.";
       }
@@ -1802,44 +1828,131 @@ export default function AppIndex() {
             </View>
 
             {/* Segmented Tab Controls */}
-            <View style={[styles.tabContainer, { borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1 }]}>
-              <TouchableOpacity 
-                style={[
-                  styles.tabButton, 
-                  activeTab === 'signin' && { backgroundColor: activeTheme.primaryColor },
-                  { borderRadius: activeTheme.borderRadius }
-                ]}
-                onPress={() => setActiveTab('signin')}
-              >
-                <Text style={[
-                  styles.tabButtonText, 
-                  { 
-                    color: activeTab === 'signin' ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff') : activeTheme.textMutedColor,
-                    fontFamily: activeTheme.fontFamily || 'System',
-                    textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
-                  }
-                ]}>Sign In</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[
-                  styles.tabButton, 
-                  activeTab === 'register' && { backgroundColor: activeTheme.primaryColor },
-                  { borderRadius: activeTheme.borderRadius }
-                ]}
-                onPress={() => setActiveTab('register')}
-              >
-                <Text style={[
-                  styles.tabButtonText, 
-                  { 
-                    color: activeTab === 'register' ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff') : activeTheme.textMutedColor,
-                    fontFamily: activeTheme.fontFamily || 'System',
-                    textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
-                  }
-                ]}>Register</Text>
-              </TouchableOpacity>
-            </View>
+            {activeTab !== 'forgot' && (
+              <View style={[styles.tabContainer, { borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1 }]}>
+                <TouchableOpacity 
+                  style={[
+                    styles.tabButton, 
+                    activeTab === 'signin' && { backgroundColor: activeTheme.primaryColor },
+                    { borderRadius: activeTheme.borderRadius }
+                  ]}
+                  onPress={() => setActiveTab('signin')}
+                >
+                  <Text style={[
+                    styles.tabButtonText, 
+                    { 
+                      color: activeTab === 'signin' ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff') : activeTheme.textMutedColor,
+                      fontFamily: activeTheme.fontFamily || 'System',
+                      textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
+                    }
+                  ]}>Sign In</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[
+                    styles.tabButton, 
+                    activeTab === 'register' && { backgroundColor: activeTheme.primaryColor },
+                    { borderRadius: activeTheme.borderRadius }
+                  ]}
+                  onPress={() => setActiveTab('register')}
+                >
+                  <Text style={[
+                    styles.tabButtonText, 
+                    { 
+                      color: activeTab === 'register' ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff') : activeTheme.textMutedColor,
+                      fontFamily: activeTheme.fontFamily || 'System',
+                      textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
+                    }
+                  ]}>Register</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-            {activeTab === 'signin' ? (
+            {activeTab === 'forgot' ? (
+              // FORGOT PASSWORD FORM
+              <View style={styles.form}>
+                <Text style={{ 
+                  color: activeTheme.textColor, 
+                  fontSize: 16, 
+                  fontWeight: '700', 
+                  fontFamily: activeTheme.fontFamily || 'System',
+                  textAlign: 'center',
+                  marginBottom: 4
+                }}>
+                  Reset Security Password
+                </Text>
+                <Text style={{ 
+                  color: activeTheme.textMutedColor, 
+                  fontSize: 12, 
+                  fontFamily: activeTheme.fontFamily || 'System',
+                  textAlign: 'center',
+                  marginBottom: 16
+                }}>
+                  Enter your registered email address to receive a secure password reset link.
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input, 
+                    { 
+                      backgroundColor: activeTheme.inputBackground, 
+                      borderColor: activeTheme.inputBorder, 
+                      borderWidth: activeTheme.borderWidth || 1,
+                      borderRadius: activeTheme.borderRadius, 
+                      color: activeTheme.textColor,
+                      fontFamily: activeTheme.fontFamily || 'System'
+                    }
+                  ]}
+                  placeholder="Email Address"
+                  placeholderTextColor={activeTheme.textMutedColor}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  value={email}
+                  onChangeText={setEmail}
+                />
+                <TouchableOpacity 
+                  style={[
+                    styles.submitBtn, 
+                    { 
+                      backgroundColor: activeTheme.primaryColor, 
+                      borderRadius: activeTheme.borderRadius,
+                      borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 3 : 0,
+                      borderColor: activeTheme.isRetro ? '#000000' : 'transparent'
+                    }
+                  ]} 
+                  onPress={handleForgotPassword}
+                  disabled={authLoading}
+                >
+                  {authLoading ? (
+                    <ActivityIndicator size="small" color={activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff'} />
+                  ) : (
+                    <Text style={[
+                      styles.submitBtnText, 
+                      { 
+                        color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff',
+                        fontFamily: activeTheme.fontFamily || 'System',
+                        textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
+                      }
+                    ]}>Send Reset Link</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  onPress={() => {
+                    setActiveTab('signin');
+                    setShowPassword(false);
+                  }}
+                  style={{ alignSelf: 'center', marginTop: 12, paddingVertical: 4 }}
+                >
+                  <Text style={{ 
+                    color: activeTheme.primaryColor, 
+                    fontSize: 13, 
+                    fontWeight: '600', 
+                    fontFamily: activeTheme.fontFamily || 'System',
+                    textDecorationLine: 'underline' 
+                  }}>
+                    Back to Sign In
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : activeTab === 'signin' ? (
               // EMAIL/PASSWORD SIGN IN FORM
               <View style={styles.form}>
                 <TextInput
@@ -1892,7 +2005,7 @@ export default function AppIndex() {
                   </TouchableOpacity>
                 </View>
                 <TouchableOpacity 
-                  onPress={handleForgotPassword}
+                  onPress={() => setActiveTab('forgot')}
                   style={{ alignSelf: 'flex-end', marginTop: -8, marginBottom: 4, paddingVertical: 4 }}
                 >
                   <Text style={{ 
