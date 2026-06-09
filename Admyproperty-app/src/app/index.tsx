@@ -556,18 +556,30 @@ export default function AppIndex() {
 
   const handleForgotPassword = async () => {
     if (!email) {
-      Alert.alert("Email Required", "Please enter your email address in the Email field first, then click Forgot Password.");
+      if (Platform.OS === 'web') {
+        alert("Email Required\n\nPlease enter your email address in the Email field first, then click Forgot Password.");
+      } else {
+        Alert.alert("Email Required", "Please enter your email address in the Email field first, then click Forgot Password.");
+      }
       return;
     }
     setAuthLoading(true);
     try {
       await sendPasswordResetEmail(auth, email.trim().toLowerCase());
-      Alert.alert(
-        "Check your email!",
-        `A password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`
-      );
+      if (Platform.OS === 'web') {
+        alert(`Check your email!\n\nA password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`);
+      } else {
+        Alert.alert(
+          "Check your email!",
+          `A password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`
+        );
+      }
     } catch (err: any) {
-      Alert.alert("Reset Failed", err.message);
+      if (Platform.OS === 'web') {
+        alert(`Reset Failed\n\n${err.message}`);
+      } else {
+        Alert.alert("Reset Failed", err.message);
+      }
     } finally {
       setAuthLoading(false);
     }
