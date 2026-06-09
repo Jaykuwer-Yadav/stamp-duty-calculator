@@ -330,6 +330,7 @@ export default function AppIndex() {
   const [loading, setLoading] = useState<boolean>(true);
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'signin' | 'register'>('signin');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
 
   // Input states
   const [email, setEmail] = useState('');
@@ -543,14 +544,30 @@ export default function AppIndex() {
   // Auth Operations
   const handleSignIn = async () => {
     if (!email || !password) {
-      Alert.alert("Input Error", "Please enter both email and password.");
+      if (Platform.OS === 'web') {
+        alert("Input Error\n\nPlease enter both email and password.");
+      } else {
+        Alert.alert("Input Error", "Please enter both email and password.");
+      }
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      if (Platform.OS === 'web') {
+        alert("Input Error\n\nPlease enter a valid email address.");
+      } else {
+        Alert.alert("Input Error", "Please enter a valid email address.");
+      }
       return;
     }
     setAuthLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
     } catch (err: any) {
-      Alert.alert("Authentication Failed", err.message);
+      if (Platform.OS === 'web') {
+        alert(`Authentication Failed\n\n${err.message}`);
+      } else {
+        Alert.alert("Authentication Failed", err.message);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -562,6 +579,14 @@ export default function AppIndex() {
         alert("Email Required\n\nPlease enter your email address in the Email field first, then click Forgot Password.");
       } else {
         Alert.alert("Email Required", "Please enter your email address in the Email field first, then click Forgot Password.");
+      }
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      if (Platform.OS === 'web') {
+        alert("Invalid Email\n\nPlease enter a valid email address.");
+      } else {
+        Alert.alert("Invalid Email", "Please enter a valid email address.");
       }
       return;
     }
@@ -597,11 +622,27 @@ export default function AppIndex() {
 
   const handleRegister = async () => {
     if (!email || !password || !fullName || !phone) {
-      Alert.alert("Input Error", "Please fill in all registration fields.");
+      if (Platform.OS === 'web') {
+        alert("Input Error\n\nPlease fill in all registration fields.");
+      } else {
+        Alert.alert("Input Error", "Please fill in all registration fields.");
+      }
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      if (Platform.OS === 'web') {
+        alert("Input Error\n\nPlease enter a valid email address.");
+      } else {
+        Alert.alert("Input Error", "Please enter a valid email address.");
+      }
       return;
     }
     if (password.length < 6) {
-      Alert.alert("Input Error", "Password must be at least 6 characters.");
+      if (Platform.OS === 'web') {
+        alert("Input Error\n\nPassword must be at least 6 characters.");
+      } else {
+        Alert.alert("Input Error", "Password must be at least 6 characters.");
+      }
       return;
     }
     setAuthLoading(true);
@@ -1820,24 +1861,36 @@ export default function AppIndex() {
                   value={email}
                   onChangeText={setEmail}
                 />
-                <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
-                  placeholder="Security Password"
-                  placeholderTextColor={activeTheme.textMutedColor}
-                  secureTextEntry
-                  value={password}
-                  onChangeText={setPassword}
-                />
+                <View style={{ flexDirection: 'row', alignItems: 'center', position: 'relative' }}>
+                  <TextInput
+                    style={[
+                      styles.input, 
+                      { 
+                        backgroundColor: activeTheme.inputBackground, 
+                        borderColor: activeTheme.inputBorder, 
+                        borderWidth: activeTheme.borderWidth || 1,
+                        borderRadius: activeTheme.borderRadius, 
+                        color: activeTheme.textColor,
+                        fontFamily: activeTheme.fontFamily || 'System',
+                        flex: 1,
+                        paddingRight: 50
+                      }
+                    ]}
+                    placeholder="Security Password"
+                    placeholderTextColor={activeTheme.textMutedColor}
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                  />
+                  <TouchableOpacity
+                    onPress={() => setShowPassword(!showPassword)}
+                    style={{ position: 'absolute', right: 12, padding: 8 }}
+                  >
+                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700', fontFamily: activeTheme.fontFamily || 'System' }}>
+                      {showPassword ? "Hide" : "Show"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
                 <TouchableOpacity 
                   onPress={handleForgotPassword}
                   style={{ alignSelf: 'flex-end', marginTop: -8, marginBottom: 4, paddingVertical: 4 }}
@@ -1936,24 +1989,36 @@ export default function AppIndex() {
                   value={phone}
                   onChangeText={setPhone}
                 />
-                <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
-                  placeholder="Security Password"
-                  placeholderTextColor={activeTheme.textMutedColor}
-                  secureTextEntry
-                  value={password}
-                  onChangeText={setPassword}
-                />
+                <View style={{ flexDirection: 'row', alignItems: 'center', position: 'relative' }}>
+                  <TextInput
+                    style={[
+                      styles.input, 
+                      { 
+                        backgroundColor: activeTheme.inputBackground, 
+                        borderColor: activeTheme.inputBorder, 
+                        borderWidth: activeTheme.borderWidth || 1,
+                        borderRadius: activeTheme.borderRadius, 
+                        color: activeTheme.textColor,
+                        fontFamily: activeTheme.fontFamily || 'System',
+                        flex: 1,
+                        paddingRight: 50
+                      }
+                    ]}
+                    placeholder="Security Password"
+                    placeholderTextColor={activeTheme.textMutedColor}
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                  />
+                  <TouchableOpacity
+                    onPress={() => setShowPassword(!showPassword)}
+                    style={{ position: 'absolute', right: 12, padding: 8 }}
+                  >
+                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700', fontFamily: activeTheme.fontFamily || 'System' }}>
+                      {showPassword ? "Hide" : "Show"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
                 
                 <TouchableOpacity 
                   style={[
