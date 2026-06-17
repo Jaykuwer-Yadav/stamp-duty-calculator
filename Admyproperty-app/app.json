@@ -1,47 +1,89 @@
 {
   "expo": {
-    "name": "Admyproperty-app",
+    "name": "Admyproperty",
     "slug": "Admyproperty-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/Proper-logo-square.png",
     "scheme": "admypropertyapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/images/Proper-logo-square.png",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to capture photos for receipts and profile.",
+        "NSPhotoLibraryUsageDescription": "Used to select photos from your gallery.",
+        "NSMicrophoneUsageDescription": "Used to record audio messages.",
+        "NSFaceIDUsageDescription": "Used for biometric login."
+      }
     },
     "android": {
       "package": "com.soulpng.admypropertyapp",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#0A0A1A",
+        "foregroundImage": "./assets/images/Proper-logo-square.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "RECORD_AUDIO",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
+      ]
     },
     "androidStatusBar": {
       "hidden": true
     },
-    "androidNavigationBar": {
-      "visible": "never"
-    },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/Proper-logo-square.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#0A0A1A",
           "android": {
-            "image": "./assets/images/image.png",
-            "imageWidth": 76
+            "image": "./assets/images/Proper-logo-square.png",
+            "imageWidth": 120
           }
         }
-      ]
+      ],
+      "expo-sharing",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/Proper-logo-square.png",
+          "color": "#0A0A1A"
+        }
+      ],
+      "expo-image",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Admyproperty to access your photos.",
+          "cameraPermission": "Allow Admyproperty to access your camera."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Admyproperty to use Face ID for login."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow Admyproperty to access your microphone."
+        }
+      ],
+      "expo-document-picker"
     ],
     "experiments": {
       "typedRoutes": true,

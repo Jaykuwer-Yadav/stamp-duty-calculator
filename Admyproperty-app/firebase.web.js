@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { initializeFirestore, persistentLocalCache, persistentSingleTabManager } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "AIzaSyDQ5PUtlqau5gP6Mt0MCd3JTmh7911mUr4",
@@ -21,3 +22,7 @@ export const db = initializeFirestore(app, {
     tabManager: persistentSingleTabManager()
   })
 });
+
+// Initialize Firebase Storage
+export const storage = getStorage(app);
+

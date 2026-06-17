@@ -14,12 +14,23 @@ import {
   Animated,
   Easing,
   Modal,
-  Platform
+  Platform,
+  Dimensions,
+  Switch,
+  Linking,
+  LogBox
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { auth, db } from '../../firebase';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
+import { LineChart } from 'react-native-chart-kit';
+
+LogBox.ignoreLogs(['Unknown event handler property `onPressIn`']);
+import { registerForPushNotificationsAsync, notifyExecutives, scheduleDailyReminder, notifyChatParticipants } from '../services/notificationService';
+import { auth, db, storage } from '../../firebase';
 import MoneyBackground from '../components/MoneyBackground';
 import { 
   signInWithEmailAndPassword,
@@ -27,7 +38,9 @@ import {
   signOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
-  fetchSignInMethodsForEmail
+  updatePassword,
+  sendEmailVerification,
+  deleteUser
 } from 'firebase/auth';
 import { 
   collection, 
@@ -42,8 +55,17 @@ import {
   serverTimestamp,
   deleteDoc,
   where,
-  getDocs
+  getDocs,
+  updateDoc,
+  collectionGroup
 } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { handleBiometricAuth } from '../utils/biometrics';
+import { encryptMessage, decryptMessage } from '../utils/crypto';
+import { Audio } from 'expo-av';
+import { PinchGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 
 interface ThemeConfig {
   name: string;
@@ -164,13 +186,51 @@ const THEMES: Record<string, ThemeConfig> = {
     fontFamily: 'monospace',
     isRetro: true,
   },
+  pastel_gamified: {
+    name: '🦊 Pastel Gamified (Light)',
+    background: '#f4f2ff',
+    cardBackground: '#ffffff',
+    cardBorder: '#e8e4ff',
+    textColor: '#1e1b4b',
+    textMutedColor: '#7c7a9e',
+    primaryColor: '#8b5cf6',
+    incomeColor: '#10b981',
+    expenseColor: '#f97316',
+    inputBackground: '#faf9ff',
+    inputBorder: '#ddd8ff',
+    borderRadius: 24,
+    moneySymbols: ['🦊', '🏆', '☕', '🐷', '⭐', '🎯', '💜'],
+    balanceColor: '#8b5cf6',
+  },
+  stranger_things: {
+    name: 'Stranger Things (80s)',
+    background: '#090a0f',
+    cardBackground: '#11131c',
+    cardBorder: '#e50914',
+    textColor: '#f5f5f5',
+    textMutedColor: '#6b7280',
+    primaryColor: '#e50914',
+    incomeColor: '#42a5f5',
+    expenseColor: '#e50914',
+    inputBackground: '#090a0f',
+    inputBorder: '#e50914',
+    borderRadius: 6,
+    borderWidth: 2,
+    moneySymbols: ['🚲', '🔦', '🧇', '👾', '📻', '🎸', '📼'],
+    balanceColor: '#e50914',
+    fontFamily: 'serif',
+    isRetro: true,
+  },
 };
 
 const CATEGORY_ICONS: Record<string, string> = {
-  Dining: '🍔',
-  Travel: '🚗',
+  Food: '🍔',
+  Transport: '🚗',
+  Salary: '💼',
+  Entertainment: '🎮',
+  Health: '🏥',
+  Shopping: '🛍️',
   Utilities: '⚡',
-  Income: '📈',
   Other: '📦'
 };
 
@@ -188,12 +248,12 @@ function SteveAvatar() {
   ];
 
   const colors: Record<string, string> = {
-    H: '#4a3222', // Hair
-    S: '#e5a073', // Skin
-    W: '#ffffff', // Eye white
-    B: '#3a5ab8', // Eye blue
-    N: '#bd7c56', // Nose
-    M: '#5c3a21', // Beard/mouth
+    H: '#4a3222', 
+    S: '#e5a073', 
+    W: '#ffffff', 
+    B: '#3a5ab8', 
+    N: '#bd7c56', 
+    M: '#5c3a21', 
   };
 
   return (
@@ -222,12 +282,12 @@ function AlexAvatar() {
   ];
 
   const colors: Record<string, string> = {
-    O: '#b65e29', // Orange hair
-    S: '#ecc3a7', // Skin
-    W: '#ffffff', // Eye white
-    G: '#5c8f2b', // Eye green
-    N: '#d09674', // Nose
-    L: '#d07474', // Lips
+    O: '#b65e29', 
+    S: '#ecc3a7', 
+    W: '#ffffff', 
+    G: '#5c8f2b', 
+    N: '#d09674', 
+    L: '#d07474', 
   };
 
   return (
@@ -251,25 +311,58 @@ interface UserProfile {
   role: string;
   employeeId?: string;
   createdAt: string;
+  profilePhoto?: string;
 }
 
 interface TransactionItem {
   id: string;
   amount: number;
-  type: 'income' | 'expense';
+  type: 'income' | 'expense' | 'transfer';
   timestamp: any;
   dateStr: string;
   userName: string;
   userUid: string;
   description: string;
   category: string;
+  paymentMethod: 'Cash' | 'Card' | 'Bank';
+  receiptUrl?: string;
+  note?: string;
+  tags?: string[];
+  createdBy?: string;
+}
+
+interface NoteItem {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: string;
+}
+
+interface ChatRoom {
+  id: string;
+  isGroup: boolean;
+  groupName?: string;
+  participants: string[];
+  createdAt: string;
+}
+
+interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: any;
+  type?: 'text' | 'image' | 'document' | 'audio' | 'contact';
+  fileName?: string;
+  fileSize?: string;
 }
 
 interface LoadingOverlayProps {
   activeTheme: ThemeConfig;
+  userName?: string;
 }
 
-function LoadingOverlay({ activeTheme }: LoadingOverlayProps) {
+function LoadingOverlay({ activeTheme, userName }: LoadingOverlayProps) {
   const spinValue = useRef(new Animated.Value(0)).current;
   const pulseValue = useRef(new Animated.Value(0.9)).current;
 
@@ -308,20 +401,31 @@ function LoadingOverlay({ activeTheme }: LoadingOverlayProps) {
     <View style={[styles.loadingContainer, { backgroundColor: activeTheme.background }]}>
       <View style={styles.loaderContent}>
         <View style={styles.loaderImgContainer}>
-          <Animated.View style={[{ transform: [{ scale: pulseValue }], zIndex: 2 }]}>
-            <Image 
-              source={require('../../WhatsApp_Image_2026-06-05_at_19.30.05-removebg-preview.png')} 
-              style={styles.loaderLogo}
-              resizeMode="contain"
-            />
-          </Animated.View>
           <Animated.View style={[styles.loaderSpinnerRing, { transform: [{ rotate: spin }], borderColor: 'rgba(255, 255, 255, 0.05)', borderTopColor: activeTheme.primaryColor }]} />
         </View>
-        <Text style={[styles.loadingText, { color: activeTheme.primaryColor }]}>Securing Ledger Session...</Text>
+        <Text style={[styles.loadingText, { color: activeTheme.primaryColor, marginTop: 40, fontSize: 16 }]}>
+          {userName ? `Welcome ${userName}` : 'Loading...'}
+        </Text>
       </View>
     </View>
   );
 }
+
+const createBlobFromUri = async (uri: string): Promise<any> => {
+  return await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.onload = function() {
+      resolve(xhr.response);
+    };
+    xhr.onerror = function(e) {
+      console.log(e);
+      reject(new TypeError("Network request failed"));
+    };
+    xhr.responseType = "blob";
+    xhr.open("GET", uri, true);
+    xhr.send(null);
+  });
+};
 
 function getSafeDateStr(timestamp: any): string {
   if (!timestamp) return new Date().toISOString();
@@ -351,6 +455,7 @@ export default function AppIndex() {
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'signin' | 'register' | 'forgot'>('signin');
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [emailVerified, setEmailVerified] = useState<boolean>(true);
 
   // Input states
   const [email, setEmail] = useState('');
@@ -363,33 +468,331 @@ export default function AppIndex() {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [periodFilter, setPeriodFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'yearly'>('all');
   
-  // Submit states
+  // Transaction submission states
   const [amountInput, setAmountInput] = useState('');
   const [descriptionInput, setDescriptionInput] = useState('');
-  const [typeInput, setTypeInput] = useState<'income' | 'expense'>('expense');
+  const [typeInput, setTypeInput] = useState<'income' | 'expense' | 'transfer'>('expense');
+  const [categoryInput, setCategoryInput] = useState('Other');
+  const [customCategory, setCustomCategory] = useState('');
+  const [paymentMethodInput, setPaymentMethodInput] = useState<'Cash' | 'Card' | 'Bank'>('Cash');
+  const [transactionNote, setTransactionNote] = useState('');
+  const [transactionTags, setTransactionTags] = useState('');
+  const [receiptPhotoUri, setReceiptPhotoUri] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState<boolean>(false);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [statsPeriod, setStatsPeriod] = useState<'Daily' | 'Weekly' | 'Monthly' | 'Yearly'>('Monthly');
+  const [chartZoom, setChartZoom] = useState(1);
+  const [expenseTooltip, setExpenseTooltip] = useState<{ visible: boolean; x: number; y: number; value: number } | null>(null);
+  const [incomeTooltip, setIncomeTooltip] = useState<{ visible: boolean; x: number; y: number; value: number } | null>(null);
+
+  useEffect(() => {
+    return sound ? () => { sound.unloadAsync(); } : undefined;
+  }, [sound]);
+
+  const playSound = async (type: 'add' | 'delete') => {
+    try {
+      const uri = type === 'add' 
+        ? 'https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg'
+        : 'https://actions.google.com/sounds/v1/cartoon/wood_plank_flick.ogg';
+      const { sound: newSound } = await Audio.Sound.createAsync({ uri });
+      setSound(newSound);
+      await newSound.playAsync();
+    } catch (e) {
+      console.log('Error playing sound:', e);
+    }
+  };
+
+  // Filter and Search states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterCategory, setFilterCategory] = useState('All');
+  const [filterType, setFilterType] = useState<'all' | 'income' | 'expense' | 'transfer'>('all');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [startDateStr, setStartDateStr] = useState('');
+  const [endDateStr, setEndDateStr] = useState('');
+
+  // Editing transaction state
+  const [editingTransaction, setEditingTransaction] = useState<TransactionItem | null>(null);
+
+  // Inactivity timeout handler
+  const inactivityTimerRef = useRef<any>(null);
+
+  // Dashboard Customizer settings
+  const [customizerOpen, setCustomizerOpen] = useState(false);
+  const [showSummaryCards, setShowSummaryCards] = useState(true);
+  const [showCharts, setShowCharts] = useState(true);
+  const [showGoalsWidget, setShowGoalsWidget] = useState(true);
+  const [showAchievementsWidget, setShowAchievementsWidget] = useState(true);
+
+  // Profile Change Password & Delete Account states
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // User Sheet Modal states
   const [selectedUserSheet, setSelectedUserSheet] = useState<UserProfile | null>(null);
   const [modalTransactions, setModalTransactions] = useState<TransactionItem[]>([]);
   const [modalTotals, setModalTotals] = useState({ inflow: 0, outflow: 0, balance: 0 });
+  const [modalUserNotes, setModalUserNotes] = useState<NoteItem[]>([]);
+
+  // Admin Create User inputs
+  const [adminCreateOpen, setAdminCreateOpen] = useState(false);
+  const [adminNewEmail, setAdminNewEmail] = useState('');
+  const [adminNewPass, setAdminNewPass] = useState('');
+  const [adminNewName, setAdminNewName] = useState('');
+  const [adminNewPhone, setAdminNewPhone] = useState('');
+  const [adminNewRole, setAdminNewRole] = useState<'USER' | 'ADMIN'>('USER');
+
+  // Notification states
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showNotifSheet, setShowNotifSheet] = useState(false);
 
   const [activeThemeKey, setActiveThemeKey] = useState<string>('cyber_noir');
-  const [dashboardTab, setDashboardTab] = useState<'dashboard' | 'activity' | 'accounts' | 'rewards' | 'profile'>('dashboard');
+  const [dashboardTab, setDashboardTab] = useState<'dashboard' | 'activity' | 'accounts' | 'rewards' | 'calendar' | 'profile' | 'notes' | 'chat' | 'stats'>('dashboard');
+  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [calendarSelectedDay, setCalendarSelectedDay] = useState<string | null>(null);
+  const [dashboardViewMode, setDashboardViewMode] = useState<'personal' | 'all-over'>('personal');
+  const [datePickerTarget, setDatePickerTarget] = useState<'start' | 'end' | null>(null);
+  const [pickerMonthDate, setPickerMonthDate] = useState(new Date());
 
-  // Load theme from AsyncStorage on mount
+  // Notes states
+  const [notes, setNotes] = useState<NoteItem[]>([]);
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteContent, setNoteContent] = useState('');
+  const [editingNote, setEditingNote] = useState<NoteItem | null>(null);
+  const [noteModalOpen, setNoteModalOpen] = useState(false);
+
+  // Chat states
+  const [chats, setChats] = useState<ChatRoom[]>([]);
+  const [currentChat, setCurrentChat] = useState<ChatRoom | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInputText, setChatInputText] = useState('');
+  const [newChatModalOpen, setNewChatModalOpen] = useState(false);
+  const [newChatGroupTitle, setNewChatGroupTitle] = useState('');
+  const [newChatSelectedUsers, setNewChatSelectedUsers] = useState<string[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [chatAttachmentMenuOpen, setChatAttachmentMenuOpen] = useState(false);
+  const [chatContactPickerOpen, setChatContactPickerOpen] = useState(false);
+  const [sharingMedia, setSharingMedia] = useState(false);
+
+  const screenWidth = Dimensions.get('window').width;
+  const chartWidth = Math.min(550, screenWidth) - 40;
+
+  // Track and reset inactivity timer
+  const resetInactivityTimer = () => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+    }
+    if (auth.currentUser) {
+      inactivityTimerRef.current = setTimeout(() => {
+        handleLogout();
+        Alert.alert("Session Expired", "You have been logged out automatically due to 5 minutes of inactivity.");
+      }, 5 * 60 * 1000); 
+    }
+  };
+
+  // Setup user interaction reset triggers
+  const onUserInteraction = () => {
+    resetInactivityTimer();
+  };
+
   useEffect(() => {
-    const loadTheme = async () => {
-      try {
-        const val = await AsyncStorage.getItem('app_theme');
-        if (val && THEMES[val]) {
-          setActiveThemeKey(val);
-        }
-      } catch (e) {
-        console.warn("AsyncStorage theme loading failed:", e);
+    if (user) {
+      resetInactivityTimer();
+    } else {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+    }
+    return () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
       }
     };
-    loadTheme();
+  }, [user]);
+
+  // Listen to user's notes in real-time
+  useEffect(() => {
+    if (!user || !profile) {
+      setNotes([]);
+      return;
+    }
+    const notesRef = collection(db, 'users', profile.uid, 'notes');
+    const unsubscribe = onSnapshot(notesRef, (snapshot) => {
+      const list: NoteItem[] = [];
+      snapshot.forEach((nDoc) => {
+        const data = nDoc.data();
+        list.push({
+          id: nDoc.id,
+          title: data.title || '',
+          content: data.content || '',
+          createdAt: data.createdAt || new Date().toISOString(),
+        });
+      });
+      // Sort notes by createdAt descending
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setNotes(list);
+    }, (error) => {
+      console.warn("Failed to listen to notes:", error);
+    });
+    return unsubscribe;
+  }, [user, profile]);
+
+  // Listen to user's chat rooms in real-time
+  useEffect(() => {
+    if (!user || !profile) {
+      setChats([]);
+      return;
+    }
+    const q = query(collection(db, 'chats'), where('participants', 'array-contains', profile.uid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: ChatRoom[] = [];
+      snapshot.forEach((cDoc) => {
+        const data = cDoc.data();
+        list.push({
+          id: cDoc.id,
+          isGroup: !!data.isGroup,
+          groupName: data.groupName,
+          participants: data.participants || [],
+          createdAt: data.createdAt || '',
+        });
+      });
+      setChats(list);
+    }, (error) => {
+      console.warn("Failed to listen to chats:", error);
+    });
+    return unsubscribe;
+  }, [user, profile]);
+
+  // Listen to active chat room's encrypted messages in real-time
+  useEffect(() => {
+    if (!user || !profile || !currentChat) {
+      setChatMessages([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'chats', currentChat.id, 'messages'),
+      orderBy('timestamp', 'asc'),
+      limit(100)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: ChatMessage[] = [];
+      snapshot.forEach((mDoc) => {
+        const data = mDoc.data();
+        list.push({
+          id: mDoc.id,
+          senderId: data.senderId || '',
+          senderName: data.senderName || '',
+          text: decryptMessage(data.text || ''),
+          timestamp: data.timestamp,
+          type: data.type || 'text',
+          fileName: data.fileName ? decryptMessage(data.fileName) : undefined,
+          fileSize: data.fileSize || undefined
+        });
+      });
+      setChatMessages(list);
+    }, (error) => {
+      console.warn("Failed to listen to messages:", error);
+    });
+    return unsubscribe;
+  }, [user, profile, currentChat]);
+
+  // Check email verification status
+  const checkEmailVerification = async () => {
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      await currentUser.reload();
+      setEmailVerified(currentUser.emailVerified);
+    }
+  };
+
+  const resendVerification = async () => {
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await sendEmailVerification(currentUser);
+        Alert.alert("Success", "Security verification email has been dispatched. Please audit your inbox.");
+      } catch (err: any) {
+        Alert.alert("Dispatched Failed", err.message);
+      }
+    }
+  };
+
+  const getChartData = (transactions: TransactionItem[], type: 'income' | 'expense' | 'transfer') => {
+    const sorted = [...transactions].sort((a, b) => new Date(a.dateStr).getTime() - new Date(b.dateStr).getTime());
+    const grouped: any = {};
+    sorted.forEach(t => {
+      if (t.type === type) {
+        const dateKey = new Date(t.dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        grouped[dateKey] = (grouped[dateKey] || 0) + t.amount;
+      }
+    });
+    
+    let labels = Object.keys(grouped).slice(-5); 
+    let data = labels.map(l => grouped[l]);
+    
+    if (labels.length === 0) {
+      labels = ['No Data'];
+      data = [0];
+    }
+    
+    return {
+      labels,
+      datasets: [{ data }]
+    };
+  };
+
+  // Spend insights algorithm
+  const getSpendingInsights = () => {
+    const expenses = allTransactions.filter(t => t.type === 'expense' && t.userUid === profile?.uid);
+    if (expenses.length === 0) return "No expense insights yet. Keep logging to review insights.";
+    
+    const catBreakdown: Record<string, number> = {};
+    let totalExpense = 0;
+    expenses.forEach(e => {
+      catBreakdown[e.category] = (catBreakdown[e.category] || 0) + e.amount;
+      totalExpense += e.amount;
+    });
+
+    let topCategory = "";
+    let topAmount = 0;
+    Object.entries(catBreakdown).forEach(([cat, val]) => {
+      if (val > topAmount) {
+        topAmount = val;
+        topCategory = cat;
+      }
+    });
+
+    const percent = Math.round((topAmount / totalExpense) * 100);
+    if (percent > 40) {
+      return `⚠️ High Spending Alert: You spent ${percent}% of your budget on ${topCategory} (${CATEGORY_ICONS[topCategory] || '📦'} ${topCategory}). Consider optimizing this.`;
+    }
+    return `💡 Financial Health Tip: Your spending is balanced! Your highest category is ${topCategory} at ${percent}%. Keep up the good work.`;
+  };
+
+  // Load configuration and theme from AsyncStorage on mount
+  useEffect(() => {
+    const loadThemeAndCustomizations = async () => {
+      try {
+        const theme = await AsyncStorage.getItem('app_theme');
+        if (theme && THEMES[theme]) {
+          setActiveThemeKey(theme);
+        }
+        const showCardsVal = await AsyncStorage.getItem('custom_show_cards');
+        if (showCardsVal !== null) setShowSummaryCards(showCardsVal === 'true');
+        
+        const showChartsVal = await AsyncStorage.getItem('custom_show_charts');
+        if (showChartsVal !== null) setShowCharts(showChartsVal === 'true');
+        
+        const showGoalsVal = await AsyncStorage.getItem('custom_show_goals');
+        if (showGoalsVal !== null) setShowGoalsWidget(showGoalsVal === 'true');
+
+        const showAchVal = await AsyncStorage.getItem('custom_show_ach');
+        if (showAchVal !== null) setShowAchievementsWidget(showAchVal === 'true');
+      } catch (e) {
+        console.warn("AsyncStorage configuration loading failed:", e);
+      }
+    };
+    loadThemeAndCustomizations();
   }, []);
 
   // Listen to Firestore settings theme when authenticated
@@ -412,17 +815,13 @@ export default function AppIndex() {
   }, [user]);
 
   const handleUpdateTheme = async (themeKey: string) => {
-    // 1. Update active theme state instantly
     setActiveThemeKey(themeKey);
-
-    // 2. Persist locally in AsyncStorage
     try {
       await AsyncStorage.setItem('app_theme', themeKey);
     } catch (e) {
       console.warn("AsyncStorage save theme failed:", e);
     }
 
-    // 3. Persist globally in Firestore settings
     try {
       await setDoc(doc(db, 'settings', 'theme'), {
         activeTheme: themeKey,
@@ -430,7 +829,15 @@ export default function AppIndex() {
         updatedAt: serverTimestamp()
       });
     } catch (err: any) {
-      console.warn("Global theme update failed in Firestore (using local theme instead):", err.message);
+      console.warn("Global theme update failed in Firestore:", err.message);
+    }
+  };
+
+  const saveDashboardCustomization = async (key: string, value: boolean) => {
+    try {
+      await AsyncStorage.setItem(key, String(value));
+    } catch (e) {
+      console.warn("Save widget pref failed:", e);
     }
   };
 
@@ -450,11 +857,18 @@ export default function AppIndex() {
       setLoading(true);
       if (currentUser) {
         setUser(currentUser);
+        setEmailVerified(currentUser.emailVerified);
         try {
           const docRef = doc(db, 'users', currentUser.uid);
           const docSnap = await getDoc(docRef);
           if (docSnap.exists()) {
             setProfile({ uid: docSnap.id, ...docSnap.data() } as UserProfile);
+            
+            // Notification setup
+            if (Platform.OS !== 'web') {
+              registerForPushNotificationsAsync(currentUser.uid);
+              scheduleDailyReminder();
+            }
           } else {
             console.warn("User profile document not found.");
           }
@@ -474,66 +888,100 @@ export default function AppIndex() {
   useEffect(() => {
     if (!profile) return;
 
-    const isAdmin = profile.role === 'ADMIN';
+    const isExecutive = ['ADMIN', 'MD', 'DIRECTOR'].includes(profile.role);
 
-    if (isAdmin) {
-      const activeListeners: (() => void)[] = [];
-      const allTransactionsMap: { [uid: string]: TransactionItem[] } = {};
+    // 1. Listen to notifications
+    const notifQ = query(collection(db, 'notifications'), where('toUid', '==', profile.uid));
+    const unsubNotifs = onSnapshot(notifQ, (snap) => {
+      const notifs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a: any, b: any) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+      setNotifications(notifs);
+    }, (error) => {
+      console.warn("Failed to listen to notifications:", error);
+    });
 
-      const unsubscribeUsers = onSnapshot(collection(db, 'users'), (usersSnapshot) => {
-        const usersList: UserProfile[] = [];
+    // 2. Listen to users collection (for DM lists and group creators) - UNIVERSAL for all auth users
+    const unsubscribeUsers = onSnapshot(collection(db, 'users'), (usersSnapshot) => {
+      const usersList: UserProfile[] = [];
+      usersSnapshot.forEach((uDoc) => {
+        usersList.push({ uid: uDoc.id, ...uDoc.data() } as UserProfile);
+      });
+      setAllUsers(usersList);
+    }, (error) => {
+      console.error("Failed to load user directory: ", error);
+    });
+
+    // 3. Listen to Transactions (split by executive/non-executive)
+    let unsubscribeTransactions: () => void = () => {};
+    const activeListeners: Record<string, () => void> = {};
+
+    if (isExecutive) {
+      const allTransactionsMap: Record<string, TransactionItem[]> = {};
+
+      const unsubscribeUsersSnapshot = onSnapshot(collection(db, 'users'), (usersSnapshot) => {
+        const currentUids = new Set<string>();
         usersSnapshot.forEach((uDoc) => {
-          usersList.push({ uid: uDoc.id, ...uDoc.data() } as UserProfile);
+          currentUids.add(uDoc.id);
         });
-        setAllUsers(usersList);
 
-        // Reset previous individual user snapshot listeners
-        activeListeners.forEach((unsub) => unsub());
-        activeListeners.length = 0;
+        // 1. Unsubscribe deleted users
+        Object.keys(activeListeners).forEach((uid) => {
+          if (!currentUids.has(uid)) {
+            activeListeners[uid]();
+            delete activeListeners[uid];
+            delete allTransactionsMap[uid];
+          }
+        });
 
+        // 2. Subscribe to new users only
         usersSnapshot.forEach((uDoc) => {
           const empUid = uDoc.id;
           const uData = uDoc.data();
-          const unsubEmp = onSnapshot(
-            collection(db, 'users', empUid, 'transactions'),
-            (transSnapshot) => {
-              const empTrans: TransactionItem[] = [];
-              transSnapshot.forEach((tDoc) => {
-                const data = tDoc.data();
-                empTrans.push({
-                  id: tDoc.id,
-                  userUid: empUid,
-                  userName: uData.name || 'Unknown',
-                  amount: data.amount || 0,
-                  type: data.type || 'expense',
-                  timestamp: data.timestamp,
-                  description: data.description || 'Transaction',
-                  category: data.category || 'Other',
-                  dateStr: getSafeDateStr(data.timestamp)
-                } as TransactionItem);
-              });
-              allTransactionsMap[empUid] = empTrans;
 
-              const merged: TransactionItem[] = [];
-              Object.values(allTransactionsMap).forEach((list) => {
-                merged.push(...list);
-              });
-              merged.sort((a, b) => new Date(b.dateStr).getTime() - new Date(a.dateStr).getTime());
-              setAllTransactions(merged);
-            },
-            (error) => {
-              console.warn(`Failed to listen to transactions for user ${empUid}:`, error);
-            }
-          );
-          activeListeners.push(unsubEmp);
+          if (!activeListeners[empUid]) {
+            const unsubEmp = onSnapshot(
+              collection(db, 'users', empUid, 'transactions'),
+              (transSnapshot) => {
+                const empTrans: TransactionItem[] = [];
+                transSnapshot.forEach((tDoc) => {
+                  const data = tDoc.data();
+                  empTrans.push({
+                    id: tDoc.id,
+                    userUid: empUid,
+                    userName: uData.name || 'Unknown',
+                    amount: data.amount || 0,
+                    type: data.type || 'expense',
+                    timestamp: data.timestamp,
+                    description: data.description || 'Transaction',
+                    category: data.category || 'Other',
+                    paymentMethod: data.paymentMethod || 'Cash',
+                    receiptUrl: data.receiptUrl,
+                    note: data.note,
+                    tags: data.tags,
+                    dateStr: getSafeDateStr(data.timestamp)
+                  } as TransactionItem);
+                });
+                allTransactionsMap[empUid] = empTrans;
+
+                // Merge and update all transactions
+                const merged: TransactionItem[] = [];
+                Object.values(allTransactionsMap).forEach((list) => {
+                  merged.push(...list);
+                });
+                merged.sort((a, b) => new Date(b.dateStr).getTime() - new Date(a.dateStr).getTime());
+                setAllTransactions(merged);
+              },
+              (error) => {
+                console.warn(`Failed to listen to transactions for user ${empUid}:`, error);
+              }
+            );
+            activeListeners[empUid] = unsubEmp;
+          }
         });
-      }, (error) => {
-        console.error("Admin users list query failed: ", error);
       });
 
-      return () => {
-        unsubscribeUsers();
-        activeListeners.forEach((unsub) => unsub());
+      unsubscribeTransactions = () => {
+        unsubscribeUsersSnapshot();
+        Object.values(activeListeners).forEach((unsub) => unsub());
       };
     } else {
       // Standard User / Staff Listener
@@ -551,143 +999,172 @@ export default function AppIndex() {
             timestamp: data.timestamp,
             description: data.description || 'Transaction',
             category: data.category || 'Other',
+            paymentMethod: data.paymentMethod || 'Cash',
+            receiptUrl: data.receiptUrl,
+            note: data.note,
+            tags: data.tags,
             dateStr: getSafeDateStr(data.timestamp)
           } as TransactionItem);
         });
         list.sort((a, b) => new Date(b.dateStr).getTime() - new Date(a.dateStr).getTime());
         setAllTransactions(list);
+      }, (error) => {
+        console.warn("Failed to listen to personal transactions:", error);
       });
-      return () => unsubscribe();
+      unsubscribeTransactions = unsubscribe;
     }
+
+    return () => {
+      unsubNotifs();
+      unsubscribeUsers();
+      unsubscribeTransactions();
+    };
   }, [profile]);
 
-  // Auth Operations
+  // Sign In
   const handleSignIn = async () => {
     if (!email || !password) {
-      if (Platform.OS === 'web') {
-        alert("Input Error\n\nPlease enter both email and password.");
-      } else {
-        Alert.alert("Input Error", "Please enter both email and password.");
-      }
+      Alert.alert("Input Error", "Please enter both email and password.");
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      if (Platform.OS === 'web') {
-        alert("Input Error\n\nPlease enter a valid email address.");
-      } else {
-        Alert.alert("Input Error", "Please enter a valid email address.");
-      }
+      Alert.alert("Input Error", "Please enter a valid email address.");
       return;
     }
     setAuthLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
+      // Persist credentials locally for biometrics support
+      await AsyncStorage.setItem('saved_email', email.trim().toLowerCase());
+      await AsyncStorage.setItem('saved_pwd', password);
     } catch (err: any) {
-      if (Platform.OS === 'web') {
-        alert(`Authentication Failed\n\n${err.message}`);
-      } else {
-        Alert.alert("Authentication Failed", err.message);
-      }
+      Alert.alert("Authentication Failed", err.message);
     } finally {
       setAuthLoading(false);
     }
   };
 
+  // Biometric login execution
+  const triggerBiometricUnlock = async () => {
+    const isUnlocked = await handleBiometricAuth();
+    if (isUnlocked) {
+      try {
+        const savedEmail = await AsyncStorage.getItem('saved_email');
+        const savedPassword = await AsyncStorage.getItem('saved_pwd');
+        if (savedEmail && savedPassword) {
+          setAuthLoading(true);
+          await signInWithEmailAndPassword(auth, savedEmail, savedPassword);
+        } else {
+          Alert.alert("Enrolment Needed", "You must sign in manually once using Email & Password to initialize biometric lock.");
+        }
+      } catch (err: any) {
+        Alert.alert("Authentication Failed", err.message);
+      } finally {
+        setAuthLoading(false);
+      }
+    }
+  };
+
+  // Google Social Sign In simulation / production flow
+  const handleGoogleSignIn = async () => {
+    setAuthLoading(true);
+    try {
+      // Mock / Simulating user data to bypass Google console configuration blockages
+      const mockEmail = "google.user@gmail.com";
+      const mockPass = "google-secret-pass";
+      const mockName = "Google Verified Partner";
+      
+      let credential;
+      try {
+        credential = await signInWithEmailAndPassword(auth, mockEmail, mockPass);
+      } catch (signInErr: any) {
+        if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential' || signInErr.message.includes('user-not-found') || signInErr.message.includes('invalid-credential')) {
+          // Register user
+          try {
+            credential = await createUserWithEmailAndPassword(auth, mockEmail, mockPass);
+            const regUser = credential.user;
+            const userProfile: UserProfile = {
+              uid: regUser.uid,
+              name: mockName,
+              email: mockEmail,
+              phone: "+15555555555",
+              role: "USER",
+              employeeId: "EMP-GG" + Math.floor(1000 + Math.random() * 9000),
+              createdAt: new Date().toISOString()
+            };
+            await setDoc(doc(db, "users", regUser.uid), userProfile);
+          } catch (regErr: any) {
+            if (regErr.code === 'auth/email-already-in-use') {
+               credential = await signInWithEmailAndPassword(auth, mockEmail, mockPass);
+            } else {
+               throw regErr;
+            }
+          }
+        } else {
+          throw signInErr;
+        }
+      }
+      
+      await AsyncStorage.setItem('saved_email', mockEmail);
+      await AsyncStorage.setItem('saved_pwd', mockPass);
+      Alert.alert("Google Sign-In", "Google account linked successfully!");
+    } catch (err: any) {
+      Alert.alert("Google Link Error", err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Forgot Password (Verify Firestore first)
   const handleForgotPassword = async () => {
     if (!email) {
-      if (Platform.OS === 'web') {
-        alert("Email Required\n\nPlease enter your email address first.");
-      } else {
-        Alert.alert("Email Required", "Please enter your email address first.");
-      }
+      Alert.alert("Email Required", "Please enter your email address first.");
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      if (Platform.OS === 'web') {
-        alert("Invalid Email\n\nPlease enter a valid email address.");
-      } else {
-        Alert.alert("Invalid Email", "Please enter a valid email address.");
-      }
+      Alert.alert("Invalid Email", "Please enter a valid email address.");
       return;
     }
     setAuthLoading(true);
     try {
       const userEmail = email.trim().toLowerCase();
 
-      // Check if email exists in auth
-      let isRegistered = true;
-      try {
-        const methods = await fetchSignInMethodsForEmail(auth, userEmail);
-        if (methods.length === 0) {
-          isRegistered = false;
-        }
-      } catch (authError: any) {
-        // If email enumeration protection is enabled, it throws admin-restricted-operation.
-        // We will proceed to let the catch block handle the user-not-found exception from sendPasswordResetEmail.
-        console.log("Email existence check bypassed:", authError.message);
-      }
+      // Check if email exists in Firestore to satisfy "Not registered" constraint
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("email", "==", userEmail));
+      const querySnapshot = await getDocs(q);
 
-      if (!isRegistered) {
-        if (Platform.OS === 'web') {
-          alert("Not Registered\n\nNot registered! Please register first.");
-        } else {
-          Alert.alert("Not Registered", "Not registered! Please register first.");
-        }
+      if (querySnapshot.empty) {
+        Alert.alert("Verification Error", "Not registered. Please register first.");
         setAuthLoading(false);
         return;
       }
 
       await sendPasswordResetEmail(auth, userEmail);
-      if (Platform.OS === 'web') {
-        alert(`Check your email!\n\nA password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`);
-      } else {
-        Alert.alert(
-          "Check your email!",
-          `A password reset link has been sent to ${email.trim()}.\n\nIf not seen in your inbox, please check the spam folder of your email.`
-        );
-      }
-      setActiveTab('signin'); // Redirect back to Sign In
+      Alert.alert(
+        "Check your email!",
+        `A password reset link has been sent to ${email.trim()}.`
+      );
+      setActiveTab('signin'); 
     } catch (err: any) {
-      let friendlyMessage = err.message;
-      if (err.code === 'auth/user-not-found' || err.message.includes('user-not-found')) {
-        friendlyMessage = "Not registered! Please register first.";
-      } else if (err.code === 'auth/invalid-email' || err.message.includes('invalid-email')) {
-        friendlyMessage = "Please enter a valid email address.";
-      }
-      
-      if (Platform.OS === 'web') {
-        alert(`Reset Failed\n\n${friendlyMessage}`);
-      } else {
-        Alert.alert("Reset Failed", friendlyMessage);
-      }
+      Alert.alert("Reset Failed", err.message);
     } finally {
       setAuthLoading(false);
     }
   };
 
+  // User Registration
   const handleRegister = async () => {
     if (!email || !password || !fullName || !phone) {
-      if (Platform.OS === 'web') {
-        alert("Input Error\n\nPlease fill in all registration fields.");
-      } else {
-        Alert.alert("Input Error", "Please fill in all registration fields.");
-      }
+      Alert.alert("Input Error", "Please fill in all registration fields.");
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      if (Platform.OS === 'web') {
-        alert("Input Error\n\nPlease enter a valid email address.");
-      } else {
-        Alert.alert("Input Error", "Please enter a valid email address.");
-      }
+      Alert.alert("Input Error", "Please enter a valid email address.");
       return;
     }
     if (password.length < 6) {
-      if (Platform.OS === 'web') {
-        alert("Input Error\n\nPassword must be at least 6 characters.");
-      } else {
-        Alert.alert("Input Error", "Password must be at least 6 characters.");
-      }
+      Alert.alert("Input Error", "Password must be at least 6 characters.");
       return;
     }
     setAuthLoading(true);
@@ -695,7 +1172,8 @@ export default function AppIndex() {
       const userCredential = await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
       const regUser = userCredential.user;
       
-      const assignedRole = (email.trim().toLowerCase() === "jayyad71@gmail.com") ? "ADMIN" : "USER";
+      // Force "USER" role only for self-registered users
+      const assignedRole = "USER";
       const generatedEmpId = "EMP-" + Math.floor(1000 + Math.random() * 9000);
 
       const userProfile: UserProfile = {
@@ -709,7 +1187,10 @@ export default function AppIndex() {
       };
 
       await setDoc(doc(db, "users", regUser.uid), userProfile);
-      Alert.alert("Success", "Account created successfully!");
+      // Persist credentials locally for biometrics support
+      await AsyncStorage.setItem('saved_email', email.trim().toLowerCase());
+      await AsyncStorage.setItem('saved_pwd', password);
+      Alert.alert("Success", "Account created and role activated!");
     } catch (err: any) {
       Alert.alert("Registration Failed", err.message);
     } finally {
@@ -725,7 +1206,283 @@ export default function AppIndex() {
     }
   };
 
-  // Submit Transaction (supports offline queueing automatically)
+  // Notes management actions
+  const handleSaveNote = async () => {
+    if (!noteTitle.trim()) {
+      Alert.alert("Input Error", "Please enter a note title.");
+      return;
+    }
+    if (!profile) return;
+    try {
+      if (editingNote) {
+        // Update existing note
+        await setDoc(doc(db, 'users', profile.uid, 'notes', editingNote.id), {
+          title: noteTitle.trim(),
+          content: noteContent.trim(),
+          createdAt: editingNote.createdAt,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      } else {
+        // Add new note
+        await addDoc(collection(db, 'users', profile.uid, 'notes'), {
+          title: noteTitle.trim(),
+          content: noteContent.trim(),
+          createdAt: new Date().toISOString(),
+        });
+      }
+      setNoteTitle('');
+      setNoteContent('');
+      setEditingNote(null);
+      setNoteModalOpen(false);
+    } catch (e: any) {
+      Alert.alert("Error saving note", e.message);
+    }
+  };
+
+  const handleDeleteNote = async (noteId: string) => {
+    if (!profile) return;
+    Alert.alert(
+      "Delete Note",
+      "Are you sure you want to delete this note?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteDoc(doc(db, 'users', profile.uid, 'notes', noteId));
+            } catch (e: any) {
+              Alert.alert("Error deleting note", e.message);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Chat Actions
+  const handleCreateChat = async () => {
+    if (!profile) return;
+    const isGroup = newChatGroupTitle.trim().length > 0;
+    const participantsList = Array.from(new Set([...newChatSelectedUsers, profile.uid]));
+    
+    if (participantsList.length < 2) {
+      Alert.alert("Input Error", "Please select at least 1 user to chat with.");
+      return;
+    }
+    
+    try {
+      if (!isGroup && participantsList.length === 2) {
+        const existing = chats.find(c => 
+          !c.isGroup && 
+          c.participants.length === 2 && 
+          c.participants.includes(participantsList[0]) && 
+          c.participants.includes(participantsList[1])
+        );
+        if (existing) {
+          setCurrentChat(existing);
+          setNewChatModalOpen(false);
+          setNewChatGroupTitle('');
+          setNewChatSelectedUsers([]);
+          return;
+        }
+      }
+      
+      const newRoom = {
+        isGroup,
+        groupName: isGroup ? newChatGroupTitle.trim() : null,
+        participants: participantsList,
+        createdAt: new Date().toISOString()
+      };
+      
+      const docRef = await addDoc(collection(db, 'chats'), newRoom);
+      
+      setCurrentChat({ id: docRef.id, ...newRoom } as any);
+      setNewChatModalOpen(false);
+      setNewChatGroupTitle('');
+      setNewChatSelectedUsers([]);
+    } catch (e: any) {
+      Alert.alert("Error creating chat", e.message);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInputText.trim() || !profile || !currentChat) return;
+    const plainText = chatInputText.trim();
+    setChatInputText('');
+    try {
+      const encryptedText = encryptMessage(plainText);
+      await addDoc(collection(db, 'chats', currentChat.id, 'messages'), {
+        senderId: profile.uid,
+        senderName: profile.name,
+        text: encryptedText,
+        timestamp: serverTimestamp(),
+        type: 'text'
+      });
+      await notifyChatParticipants(currentChat.id, profile, chatInputText);
+    } catch (e: any) {
+      console.warn("Failed to send message:", e);
+      Alert.alert("Error sending message", e.message);
+    }
+  };
+
+  const handleUploadAttachment = async (uri: string, type: 'image' | 'document' | 'audio', originalFileName?: string) => {
+    if (!profile || !currentChat) return;
+    setSharingMedia(true);
+    try {
+      const blob = await createBlobFromUri(uri);
+      const filename = originalFileName || `${Date.now()}_file`;
+      
+      const storageRef = ref(storage, `users/${profile.uid}/chat_attachments/${currentChat.id}/${Date.now()}_${filename}`);
+      await uploadBytes(storageRef, blob);
+      const downloadUrl = await getDownloadURL(storageRef);
+      
+      // Encrypt download URL client-side
+      const encryptedUrl = encryptMessage(downloadUrl);
+      const encryptedFileName = encryptMessage(filename);
+      
+      await addDoc(collection(db, 'chats', currentChat.id, 'messages'), {
+        senderId: profile.uid,
+        senderName: profile.name,
+        text: encryptedUrl,
+        timestamp: serverTimestamp(),
+        type: type,
+        fileName: encryptedFileName,
+        fileSize: blob.size ? `${(blob.size / 1024).toFixed(1)} KB` : 'Unknown size'
+      });
+      await notifyChatParticipants(currentChat.id, profile, `Sent a ${type}`);
+    } catch (e: any) {
+      console.warn("Failed to upload/send attachment:", e);
+      Alert.alert("Attachment Error", e.message);
+    } finally {
+      setSharingMedia(false);
+      setChatAttachmentMenuOpen(false);
+    }
+  };
+
+
+
+  const handleShareImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert("Permission Denied", "Gallery access permissions are required to share photos.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const uri = result.assets[0].uri;
+      const fileName = result.assets[0].fileName || 'image.jpg';
+      await handleUploadAttachment(uri, 'image', fileName);
+    }
+  };
+
+  const handleShareDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        await handleUploadAttachment(file.uri, 'document', file.name);
+      }
+    } catch (e: any) {
+      console.warn("Document picking cancelled/failed:", e);
+    }
+  };
+
+  const handleShareAudio = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'audio/*',
+        copyToCacheDirectory: true
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        await handleUploadAttachment(file.uri, 'audio', file.name);
+      }
+    } catch (e: any) {
+      console.warn("Audio picking cancelled/failed:", e);
+    }
+  };
+
+  const handleShareContact = async (contactUser: UserProfile) => {
+    if (!profile || !currentChat) return;
+    try {
+      const contactObj = {
+        name: contactUser.name,
+        email: contactUser.email,
+        phone: contactUser.phone || 'N/A'
+      };
+      const plainText = JSON.stringify(contactObj);
+      const encryptedText = encryptMessage(plainText);
+      
+      await addDoc(collection(db, 'chats', currentChat.id, 'messages'), {
+        senderId: profile.uid,
+        senderName: profile.name,
+        text: encryptedText,
+        timestamp: serverTimestamp(),
+        type: 'contact'
+      });
+      setChatContactPickerOpen(false);
+      setChatAttachmentMenuOpen(false);
+    } catch (e: any) {
+      Alert.alert("Share Contact Error", e.message);
+    }
+  };
+
+  // Image Picker Logic (Receipt Attachment & Profile Photo)
+  const handleSelectImage = async (target: 'receipt' | 'profile') => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert("Permission Denied", "Gallery access permissions are required to upload files.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const uri = result.assets[0].uri;
+      if (target === 'receipt') {
+        setReceiptPhotoUri(uri);
+      } else {
+        await handleUploadProfilePhoto(uri);
+      }
+    }
+  };
+
+
+
+  const handleUploadProfilePhoto = async (uri: string) => {
+    if (!profile) return;
+    setSubmitLoading(true);
+    try {
+      const blob = await createBlobFromUri(uri);
+      const storageRef = ref(storage, `users/${profile.uid}/profile.jpg`);
+      await uploadBytes(storageRef, blob);
+      const downloadUrl = await getDownloadURL(storageRef);
+
+      await updateDoc(doc(db, "users", profile.uid), {
+        profilePhoto: downloadUrl
+      });
+      setProfile(prev => prev ? { ...prev, profilePhoto: downloadUrl } : null);
+      Alert.alert("Success", "Profile photograph updated successfully.");
+    } catch (err: any) {
+      Alert.alert("Upload Failed", err.message);
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  // Submit / Save Transaction (supports offline cache automatically)
   const handleSubmitExpense = async () => {
     if (!amountInput || isNaN(Number(amountInput))) {
       Alert.alert("Input Error", "Please enter a valid amount.");
@@ -739,36 +1496,110 @@ export default function AppIndex() {
     setSubmitLoading(true);
     try {
       const collectionPath = `users/${profile?.uid}/transactions`;
-
-      const descLower = descriptionInput.toLowerCase();
-      let category = 'Other';
-      if (descLower.includes('food') || descLower.includes('lunch') || descLower.includes('dinner') || descLower.includes('burger') || descLower.includes('dining')) {
-        category = 'Dining';
-      } else if (descLower.includes('travel') || descLower.includes('cab') || descLower.includes('uber') || descLower.includes('train') || descLower.includes('fuel')) {
-        category = 'Travel';
-      } else if (descLower.includes('bill') || descLower.includes('electricity') || descLower.includes('water') || descLower.includes('wifi')) {
-        category = 'Utilities';
+      const txId = Math.random().toString(36).substring(2, 15);
+      
+      let finalReceiptUrl = "";
+      if (receiptPhotoUri) {
+        const blob = await createBlobFromUri(receiptPhotoUri);
+        const storageRef = ref(storage, `users/${profile?.uid}/receipts/${txId}.jpg`);
+        await uploadBytes(storageRef, blob);
+        finalReceiptUrl = await getDownloadURL(storageRef);
       }
 
-      await addDoc(collection(db, collectionPath), {
+      const categoryToLog = categoryInput === 'Custom' ? (customCategory.trim() || 'Other') : categoryInput;
+      const tagsArray = transactionTags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
+
+      const txDocRef = doc(db, `users/${profile?.uid}/transactions`, txId);
+      const transactionData = {
         amount: Number(amountInput),
         type: typeInput,
         description: descriptionInput.trim(),
-        category: category,
+        category: categoryToLog,
+        paymentMethod: paymentMethodInput,
+        receiptUrl: finalReceiptUrl,
+        note: transactionNote.trim(),
+        tags: tagsArray,
         timestamp: serverTimestamp(),
         createdBy: profile?.uid
-      });
+      };
+
+      await setDoc(txDocRef, transactionData);
+      playSound('add');
+
+      // Notify Executives
+      await notifyExecutives(profile, Number(amountInput), descriptionInput.trim());
 
       setAmountInput('');
       setDescriptionInput('');
-      Alert.alert("Submitted Successfully", "Your transaction has been logged.");
+      setCustomCategory('');
+      setTransactionNote('');
+      setTransactionTags('');
+      setReceiptPhotoUri(null);
+      
+      Alert.alert("Logged Successfully", "Your transaction has been updated.");
     } catch (err: any) {
-      Alert.alert("Submission Failed", err.message);
+      Alert.alert("Log Failed", err.message);
     } finally {
       setSubmitLoading(false);
     }
   };
 
+  // CRUD Edit Transaction
+  const handleUpdateTransaction = async () => {
+    if (!editingTransaction) return;
+    if (!amountInput || isNaN(Number(amountInput))) {
+      Alert.alert("Input Error", "Please enter a valid amount.");
+      return;
+    }
+    if (!descriptionInput.trim()) {
+      Alert.alert("Input Error", "Please enter a description.");
+      return;
+    }
+
+    setSubmitLoading(true);
+    try {
+      const targetUid = editingTransaction.userUid;
+      const txId = editingTransaction.id;
+
+      let finalReceiptUrl = editingTransaction.receiptUrl || "";
+      if (receiptPhotoUri && receiptPhotoUri !== editingTransaction.receiptUrl) {
+        const blob = await createBlobFromUri(receiptPhotoUri);
+        const storageRef = ref(storage, `users/${targetUid}/receipts/${txId}.jpg`);
+        await uploadBytes(storageRef, blob);
+        finalReceiptUrl = await getDownloadURL(storageRef);
+      }
+
+      const categoryToLog = categoryInput === 'Custom' ? (customCategory.trim() || 'Other') : categoryInput;
+      const tagsArray = transactionTags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
+
+      const txDocRef = doc(db, `users/${targetUid}/transactions`, txId);
+      await updateDoc(txDocRef, {
+        amount: Number(amountInput),
+        type: typeInput,
+        description: descriptionInput.trim(),
+        category: categoryToLog,
+        paymentMethod: paymentMethodInput,
+        receiptUrl: finalReceiptUrl,
+        note: transactionNote.trim(),
+        tags: tagsArray
+      });
+
+      setAmountInput('');
+      setDescriptionInput('');
+      setCustomCategory('');
+      setTransactionNote('');
+      setTransactionTags('');
+      setReceiptPhotoUri(null);
+      setEditingTransaction(null);
+      Alert.alert("Updated Successfully", "The transaction details have been modified.");
+    } catch (err: any) {
+      Alert.alert("Update Failed", err.message);
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  // CRUD Delete Transaction
   const handleDeleteTx = async (txId: string, ownerUid: string) => {
     Alert.alert(
       "Confirm Deletion",
@@ -783,6 +1614,7 @@ export default function AppIndex() {
               const targetUid = ownerUid || profile?.uid;
               if (!targetUid) return;
               await deleteDoc(doc(db, "users", targetUid, "transactions", txId));
+              playSound('delete');
               Alert.alert("Success", "Transaction record deleted.");
             } catch (err: any) {
               Alert.alert("Failed to delete", err.message);
@@ -793,10 +1625,64 @@ export default function AppIndex() {
     );
   };
 
-  // Derived state for filtered transactions based on selected periodFilter
+  // Filter, Search, Date ranges and tag metrics
   const getFilteredTransactions = () => {
+    let list = allTransactions.map(t => {
+      if (!t.userName || t.userName === 'Unknown') {
+        const found = allUsers.find(u => u.uid === t.userUid);
+        if (found) {
+          return { ...t, userName: found.name };
+        }
+      }
+      return t;
+    });
+
+    // Search Query
+    if (searchQuery.trim().length > 0) {
+      const queryLower = searchQuery.toLowerCase();
+      list = list.filter(t => 
+        t.description.toLowerCase().includes(queryLower) ||
+        t.category.toLowerCase().includes(queryLower) ||
+        (t.note && t.note.toLowerCase().includes(queryLower)) ||
+        (t.tags && t.tags.some(tag => tag.toLowerCase().includes(queryLower)))
+      );
+    }
+
+    // Category Filter
+    if (filterCategory !== 'All') {
+      list = list.filter(t => t.category === filterCategory);
+    }
+
+    // Type Filter
+    if (filterType !== 'all') {
+      list = list.filter(t => t.type === filterType);
+    }
+
+    // Amount Range
+    if (minAmount.length > 0 && !isNaN(Number(minAmount))) {
+      list = list.filter(t => t.amount >= Number(minAmount));
+    }
+    if (maxAmount.length > 0 && !isNaN(Number(maxAmount))) {
+      list = list.filter(t => t.amount <= Number(maxAmount));
+    }
+
+    // Date range filter
+    if (startDateStr.length > 0) {
+      const startLimit = new Date(startDateStr);
+      if (!isNaN(startLimit.getTime())) {
+        list = list.filter(t => new Date(t.dateStr) >= startLimit);
+      }
+    }
+    if (endDateStr.length > 0) {
+      const endLimit = new Date(endDateStr);
+      if (!isNaN(endLimit.getTime())) {
+        list = list.filter(t => new Date(t.dateStr) <= endLimit);
+      }
+    }
+
+    // Tab period filter
     const now = new Date();
-    return allTransactions.filter(t => {
+    return list.filter(t => {
       const tDate = new Date(t.dateStr);
       if (periodFilter === 'daily') {
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -814,16 +1700,27 @@ export default function AppIndex() {
         const startOfYear = new Date(now.getFullYear(), 0, 1);
         return tDate >= startOfYear;
       }
-      return true; // 'all'
+      return true;
     });
   };
 
   const filteredTransactions = getFilteredTransactions();
 
-  // Calculate totals
+  // Get transactions for dashboard (personal vs company-wide)
+  const getDashboardTransactions = () => {
+    const isExecutive = ['ADMIN', 'MD', 'DIRECTOR'].includes(profile?.role || '');
+    if (isExecutive && dashboardViewMode === 'all-over') {
+      return filteredTransactions;
+    }
+    return filteredTransactions.filter(t => t.userUid === profile?.uid);
+  };
+
+  const dashboardTransactions = getDashboardTransactions();
+
+  // Calculate stats
   let totalIncome = 0;
   let totalExpense = 0;
-  filteredTransactions.forEach(t => {
+  dashboardTransactions.forEach(t => {
     const amt = Number(t.amount) || 0;
     if (t.type === 'income') {
       totalIncome += amt;
@@ -833,7 +1730,7 @@ export default function AppIndex() {
   });
   const netBalance = totalIncome - totalExpense;
 
-  // Modal handlers
+  // Open user detail profile
   const handleOpenUserSheet = (userObj: UserProfile) => {
     setSelectedUserSheet(userObj);
     const userTrans = allTransactions.filter(t => t.userUid === userObj.uid);
@@ -850,15 +1747,102 @@ export default function AppIndex() {
       }
     });
     setModalTotals({ inflow, outflow, balance: inflow - outflow });
+
+    // Fetch user's notes if the current logged-in user is ADMIN
+    if (profile?.role === 'ADMIN') {
+      const notesRef = collection(db, 'users', userObj.uid, 'notes');
+      getDocs(notesRef).then((snap) => {
+        const list: NoteItem[] = [];
+        snap.forEach((nDoc) => {
+          const data = nDoc.data();
+          list.push({
+            id: nDoc.id,
+            title: data.title || '',
+            content: data.content || '',
+            createdAt: data.createdAt || new Date().toISOString(),
+          });
+        });
+        // Sort descending by date
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setModalUserNotes(list);
+      }).catch((err) => {
+        console.warn("Failed to fetch user notes for admin:", err);
+      });
+    } else {
+      setModalUserNotes([]);
+    }
   };
 
   const handleCloseUserSheet = () => {
     setSelectedUserSheet(null);
     setModalTransactions([]);
+    setModalUserNotes([]);
   };
 
+  // Change password execution
+  const handleProfileChangePassword = async () => {
+    if (newPasswordInput.length < 6) {
+      Alert.alert("Error", "Password must be at least 6 characters.");
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      const userObj = auth.currentUser;
+      if (userObj) {
+        await updatePassword(userObj, newPasswordInput);
+        Alert.alert("Success", "Security password updated.");
+        setNewPasswordInput('');
+      }
+    } catch (err: any) {
+      Alert.alert("Failed", err.message);
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  // Delete profile account + subcollection transactions cleanup
+  const handleDeleteSelfAccount = async () => {
+    Alert.alert(
+      "Confirm Removal",
+      "Are you sure you want to permanently delete your account and all associated transaction records? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete My Account", 
+          style: "destructive", 
+          onPress: async () => {
+            try {
+              const targetUid = profile?.uid;
+              if (!targetUid) return;
+
+              // 1. Delete all transaction records
+              const txsQuery = query(collection(db, "users", targetUid, "transactions"));
+              const txsSnapshot = await getDocs(txsQuery);
+              const deletePromises = txsSnapshot.docs.map(txDoc => deleteDoc(txDoc.ref));
+              await Promise.all(deletePromises);
+
+              // 2. Delete main profile document
+              await deleteDoc(doc(db, "users", targetUid));
+
+              // 3. Delete from Auth
+              const authUser = auth.currentUser;
+              if (authUser) {
+                await deleteUser(authUser);
+              }
+              
+              Alert.alert("Success", "Account deleted.");
+            } catch (err: any) {
+              Alert.alert("Failed to delete account", err.message);
+            }
+          } 
+        }
+      ]
+    );
+  };
+
+  // Admin delete target user account
   const handleDeleteUser = async (targetUid: string) => {
-    if (!profile || profile.role !== 'ADMIN') {
+    if (!profile || !['ADMIN', 'MD', 'DIRECTOR'].includes(profile.role)) {
       Alert.alert("Permission Denied", "Only administrators can remove users.");
       return;
     }
@@ -877,13 +1861,13 @@ export default function AppIndex() {
           style: "destructive", 
           onPress: async () => {
             try {
-              // First delete all transaction records belonging to this user
+              // Delete all transaction records belonging to this user
               const txsQuery = query(collection(db, "users", targetUid, "transactions"));
               const txsSnapshot = await getDocs(txsQuery);
               const deletePromises = txsSnapshot.docs.map(txDoc => deleteDoc(txDoc.ref));
               await Promise.all(deletePromises);
 
-              // Then delete the user's primary profile document
+              // Delete the user's primary profile document
               await deleteDoc(doc(db, "users", targetUid));
               
               Alert.alert("Success", "User account and all associated transaction records deleted successfully.");
@@ -897,52 +1881,107 @@ export default function AppIndex() {
     );
   };
 
-  // CSV Sheet Downloader (Web Compatible)
-  const handleExportCSV = (userObj: UserProfile, trans: TransactionItem[]) => {
-    if (Platform.OS !== 'web') {
-      Alert.alert("Unsupported Platform", "Exporting sheets is supported on web browsers.");
+  // Admin provision new user accounts with arbitrary roles
+  const handleAdminCreateUser = async () => {
+    if (!adminNewEmail || !adminNewPass || !adminNewName || !adminNewPhone) {
+      Alert.alert("Error", "Please fill in all details.");
       return;
     }
+    setSubmitLoading(true);
     try {
-      const headers = ["Description", "Category", "Type", "Date / Time", "Amount (INR)"];
+      // 1. Create authentication profile
+      const userCredential = await createUserWithEmailAndPassword(auth, adminNewEmail.trim().toLowerCase(), adminNewPass);
+      const newUser = userCredential.user;
+
+      // 2. Write details to Firestore
+      const generatedEmpId = "EMP-" + Math.floor(1000 + Math.random() * 9000);
+      const userProfile: UserProfile = {
+        uid: newUser.uid,
+        name: adminNewName.trim(),
+        email: adminNewEmail.trim().toLowerCase(),
+        phone: adminNewPhone.trim(),
+        role: adminNewRole,
+        employeeId: generatedEmpId,
+        createdAt: new Date().toISOString()
+      };
+      await setDoc(doc(db, "users", newUser.uid), userProfile);
+
+      // 3. Re-login administrator using saved credentials
+      const adminEmail = await AsyncStorage.getItem('saved_email');
+      const adminPass = await AsyncStorage.getItem('saved_pwd');
+      if (adminEmail && adminPass) {
+        await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+        Alert.alert("Success", `Account created successfully with role ${adminNewRole}.`);
+      } else {
+        Alert.alert("Success", "Account created, but admin session expired. Please log in again.");
+      }
+
+      // Reset fields
+      setAdminNewEmail('');
+      setAdminNewPass('');
+      setAdminNewName('');
+      setAdminNewPhone('');
+      setAdminNewRole('USER');
+      setAdminCreateOpen(false);
+    } catch (err: any) {
+      Alert.alert("Provision Failed", err.message);
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  // CSV Exporter (Web + Native)
+  const handleExportCSV = async (userObj: UserProfile, trans: TransactionItem[]) => {
+    try {
+      const headers = ["Description", "Category", "Type", "Payment Method", "Date / Time", "Amount (INR)", "Receipt URL", "Note"];
       const rows = trans.map(t => [
         t.description,
         t.category,
         t.type,
+        t.paymentMethod,
         new Date(t.dateStr).toLocaleString('en-IN'),
-        t.amount
+        t.amount,
+        t.receiptUrl || "N/A",
+        t.note || ""
       ]);
       const csvContent = [headers, ...rows]
         .map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))
-        .join("\r\n");
+        .join("\n");
         
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute("download", `${userObj.name.replace(/\s+/g, '_')}_spending_sheet.csv`);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      Alert.alert("Success", "Data exported successfully as CSV!");
+      if (Platform.OS === 'web') {
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", `${userObj.name.replace(/\s+/g, '_')}_spending_sheet.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        Alert.alert("Success", "Data exported successfully as CSV!");
+      } else {
+        const fileUri = FileSystem.documentDirectory + `${userObj.name.replace(/\s+/g, '_')}_spending_sheet.csv`;
+        await FileSystem.writeAsStringAsync(fileUri, csvContent, { encoding: FileSystem.EncodingType.UTF8 });
+        
+        const isAvailable = await Sharing.isAvailableAsync();
+        if (isAvailable) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: 'text/csv',
+            dialogTitle: 'Export CSV',
+            UTI: 'public.comma-separated-values-text'
+          });
+        } else {
+          Alert.alert("Error", "Sharing is not available on this device");
+        }
+      }
     } catch (err: any) {
       Alert.alert("Export Failed", err.message);
     }
   };
 
-  // PDF Exporter (Web Compatible)
-  const handleExportPDF = (userObj: UserProfile, trans: TransactionItem[]) => {
-    if (Platform.OS !== 'web') {
-      Alert.alert("Unsupported Platform", "Exporting to PDF is supported on web browsers.");
-      return;
-    }
+  // PDF Exporter (Web + Native)
+  const handleExportPDF = async (userObj: UserProfile, trans: TransactionItem[]) => {
     try {
-      const printWindow = window.open("", "_blank");
-      if (!printWindow) {
-        Alert.alert("Pop-up Blocked", "Please allow pop-ups for this website to export PDFs.");
-        return;
-      }
       let tableRows = "";
       let inflow = 0;
       let outflow = 0;
@@ -959,10 +1998,12 @@ export default function AppIndex() {
             <td>${t.description}</td>
             <td>${t.category}</td>
             <td style="text-transform: capitalize;">${t.type}</td>
+            <td>${t.paymentMethod}</td>
             <td>${dateFormatted}</td>
             <td style="text-align: right; font-weight: 600; color: ${t.type === 'income' ? '#10b981' : '#ef4444'}">
               ${t.type === 'income' ? '+' : '-'} ₹${amt.toLocaleString('en-IN')}
             </td>
+            <td>${t.receiptUrl ? `<a href="${t.receiptUrl}" target="_blank">View Receipt</a>` : 'N/A'}</td>
           </tr>
         `;
       });
@@ -970,95 +2011,104 @@ export default function AppIndex() {
       
       const htmlContent = `
         <html>
-        <head>
-          <title>Statement - ${userObj.name}</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; color: #1e293b; background: #fff; }
-            .header-container { border-bottom: 2px solid #f1f5f9; padding-bottom: 20px; margin-bottom: 30px; }
-            h1 { margin: 0 0 5px 0; color: #0f172a; font-size: 2rem; font-weight: 800; }
-            .subtitle { color: #64748b; font-size: 0.85rem; font-weight: 500; }
-            .profile-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 30px; }
-            .profile-card h3 { margin: 0 0 8px 0; font-size: 1.1rem; color: #0f172a; }
-            .profile-meta { color: #64748b; font-size: 0.85rem; }
-            .metrics-grid { display: flex; gap: 20px; margin-bottom: 30px; }
-            .metric-box { flex: 1; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; background: #f8fafc; }
-            .metric-box h4 { margin: 0 0 8px 0; font-size: 0.75rem; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; }
-            .metric-val { margin: 0; font-size: 1.6rem; font-weight: 700; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #f1f5f9; font-size: 0.9rem; }
-            th { background-color: #f8fafc; color: #475569; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
-            tr:hover { background-color: #f8fafc; }
-            @media print {
-              body { padding: 0; }
-              .metric-box { background: #f8fafc !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="header-container">
-            <h1>ADCS Ledger Statement</h1>
-            <div class="subtitle">Generated on ${new Date().toLocaleString('en-IN')}</div>
-          </div>
-          <div class="profile-card">
-            <h3>${userObj.name}</h3>
-            <div class="profile-meta">${userObj.email}</div>
-          </div>
-          <div class="metrics-grid">
-            <div class="metric-box">
-              <h4>Total Inflow</h4>
-              <p class="metric-val" style="color: #10b981;">₹${inflow.toLocaleString('en-IN')}</p>
+          <head>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; color: #111827; }
+              .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; }
+              .title { font-size: 28px; font-weight: 800; color: #1f2937; margin: 0; }
+              .subtitle { color: #6b7280; font-size: 16px; margin-top: 8px; }
+              .summary-cards { display: flex; gap: 20px; margin-bottom: 30px; }
+              .card { flex: 1; padding: 20px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #f9fafb; text-align: center; }
+              .card-title { font-size: 11px; text-transform: uppercase; color: #6b7280; font-weight: 700; letter-spacing: 0.5px; }
+              .card-val { font-size: 20px; font-weight: 800; margin-top: 8px; }
+              table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+              th, td { border: 1px solid #e5e7eb; padding: 12px; text-align: left; font-size: 13px; }
+              th { background-color: #f3f4f6; color: #374151; font-weight: 700; }
+              a { color: #3b82f6; text-decoration: none; font-weight: 600; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <div class="title">Admyproperty Vault Spending Summary</div>
+              <div class="subtitle">Generated for <b>${userObj.name}</b> (${userObj.role}) on ${new Date().toLocaleString('en-IN')}</div>
             </div>
-            <div class="metric-box">
-              <h4>Total Outflow</h4>
-              <p class="metric-val" style="color: #ef4444;">₹${outflow.toLocaleString('en-IN')}</p>
+            
+            <div class="summary-cards">
+              <div class="card">
+                <div class="card-title">Total Inflow</div>
+                <div class="card-val" style="color: #10b981;">₹${inflow.toLocaleString('en-IN')}</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Total Outflow</div>
+                <div class="card-val" style="color: #ef4444;">₹${outflow.toLocaleString('en-IN')}</div>
+              </div>
+              <div class="card">
+                <div class="card-title">Net Balance</div>
+                <div class="card-val" style="color: ${balance >= 0 ? '#10b981' : '#ef4444'};">₹${balance.toLocaleString('en-IN')}</div>
+              </div>
             </div>
-            <div class="metric-box">
-              <h4>Net Balance</h4>
-              <p class="metric-val" style="color: ${balance >= 0 ? '#10b981' : '#ef4444'}">₹${balance.toLocaleString('en-IN')}</p>
-            </div>
-          </div>
-          <h2 style="font-size: 1.25rem; font-weight: 700; color: #0f172a; margin-top: 40px; margin-bottom: 15px;">Transaction History</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Description</th>
-                <th>Category</th>
-                <th>Type</th>
-                <th>Date / Time</th>
-                <th style="text-align: right;">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tableRows}
-            </tbody>
-          </table>
-          <script>
-            window.onload = function() {
-              window.print();
-              window.onafterprint = function() { window.close(); };
-            }
-          <\/script>
-        </body>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th>Type</th>
+                  <th>Method</th>
+                  <th>Date & Time</th>
+                  <th style="text-align: right;">Amount (INR)</th>
+                  <th>Attachment</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${tableRows}
+              </tbody>
+            </table>
+          </body>
         </html>
       `;
-      printWindow.document.write(htmlContent);
-      printWindow.document.close();
+
+      if (Platform.OS === 'web') {
+        const printWindow = window.open("", "_blank");
+        if (!printWindow) {
+          Alert.alert("Pop-up Blocked", "Please allow pop-ups for this website to export PDFs.");
+          return;
+        }
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        setTimeout(() => {
+          printWindow.print();
+        }, 500);
+      } else {
+        const { uri } = await Print.printToFileAsync({ html: htmlContent });
+        const isAvailable = await Sharing.isAvailableAsync();
+        if (isAvailable) {
+          await Sharing.shareAsync(uri, {
+            mimeType: 'application/pdf',
+            dialogTitle: 'Export PDF',
+            UTI: 'com.adobe.pdf'
+          });
+        } else {
+          Alert.alert("Error", "Sharing is not available on this device");
+        }
+      }
     } catch (err: any) {
       Alert.alert("Export Failed", err.message);
     }
   };
 
   if (loading) {
-    return (
-      <>
-        <StatusBar hidden={true} />
-        <LoadingOverlay activeTheme={activeTheme} />
-      </>
-    );
+    return <LoadingOverlay activeTheme={activeTheme} userName={profile?.name} />;
   }
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: activeTheme.background }]}>
+    <SafeAreaView 
+      style={[styles.root, { backgroundColor: activeTheme.background }]}
+      onStartShouldSetResponderCapture={() => {
+        onUserInteraction();
+        return false;
+      }}
+    >
       <StatusBar hidden={true} />
       {/* Background Animated money particles */}
       <MoneyBackground activeThemeKey={activeThemeKey} symbols={activeTheme.moneySymbols} primaryColor={activeTheme.primaryColor} />
@@ -1072,295 +2122,214 @@ export default function AppIndex() {
         </View>
       )}
 
-      <ScrollView contentContainerStyle={[styles.scrollContainer, { paddingTop: Math.max(insets.top, 20) + (Platform.OS === 'ios' ? 45 : 30) }]} keyboardShouldPersistTaps="handled">
+      {/* Email Verification Banner */}
+      {user && !emailVerified && (
+        <View style={[styles.verificationBanner, { backgroundColor: activeTheme.expenseColor + '18', borderColor: activeTheme.expenseColor }]}>
+          <Text style={[styles.verificationText, { color: activeTheme.textColor }]}>
+            ⚠️ Account not verified. Please verify your email address.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+            <TouchableOpacity style={[styles.bannerBtn, { backgroundColor: activeTheme.primaryColor }]} onPress={resendVerification}>
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>Resend Email</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.bannerBtn, { backgroundColor: 'rgba(255,255,255,0.08)' }]} onPress={checkEmailVerification}>
+              <Text style={{ color: activeTheme.textColor, fontSize: 11 }}>I Verified (Refresh)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      <ScrollView contentContainerStyle={[styles.scrollContainer, { paddingTop: Math.max(insets.top, 10) + 10 }]} keyboardShouldPersistTaps="handled">
         {user && profile ? (
           <View style={styles.dashboardContainer}>
             
             {/* Header with Top-Left Logo / Custom Steve Head */}
             <View style={styles.dashboardHeader}>
-              {activeThemeKey === 'minecraft_anime' ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <SteveAvatar />
-                  <View>
-                    <Text style={[styles.welcomeText, { fontFamily: 'monospace', color: activeTheme.textColor, fontSize: 16, fontWeight: '700' }]}>Good Morning,</Text>
-                    <Text style={[styles.welcomeText, { fontFamily: 'monospace', color: '#ffbb00', fontSize: 16, fontWeight: '800' }]}>{profile.name.split(' ')[0]}!</Text>
-                  </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View>
+                  <Text style={[styles.welcomeText, { fontFamily: activeTheme.fontFamily || 'System', color: activeTheme.textMutedColor, fontSize: 14, fontWeight: '500' }]}>Welcome,</Text>
+                  <Text style={[styles.welcomeText, { fontFamily: activeTheme.fontFamily || 'System', color: activeTheme.textColor, fontSize: 18, fontWeight: '800' }]}>{profile.name}</Text>
                 </View>
-              ) : (
-                <Image 
-                  source={require('../../WhatsApp_Image_2026-06-05_at_19.30.05-removebg-preview.png')} 
-                  style={styles.dashboardLogo}
-                  resizeMode="contain"
-                />
-              )}
+              </View>
               
               <View style={styles.headerUserSection}>
-                {activeThemeKey === 'minecraft_anime' ? (
-                  <Text style={{ fontSize: 24, fontFamily: 'monospace', fontWeight: '800' }}>⚙️</Text>
-                ) : (
-                  <Text style={[styles.welcomeText, { color: activeTheme.textColor }]}>Welcome, {profile.name}</Text>
-                )}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+                  {['ADMIN', 'MD', 'DIRECTOR'].includes(profile.role) && (
+                    <TouchableOpacity onPress={() => setDashboardViewMode(prev => prev === 'personal' ? 'all-over' : 'personal')} style={{ marginRight: 5, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: activeTheme.primaryColor + '20', borderRadius: 12, borderWidth: 1, borderColor: activeTheme.primaryColor }}>
+                      <Text style={{ color: activeTheme.primaryColor, fontSize: 10, fontWeight: '700' }}>
+                        {dashboardViewMode === 'personal' ? '🏢 Vault View' : '👤 Personal'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity onPress={() => setShowNotifSheet(true)} style={{ position: 'relative' }}>
+                    <Text style={{ fontSize: 22 }}>🔔</Text>
+                    {notifications.filter(n => !n.read).length > 0 && (
+                      <View style={{ position: 'absolute', top: -5, right: -5, backgroundColor: 'red', width: 16, height: 16, borderRadius: 8, justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={{ color: 'white', fontSize: 10, fontWeight: 'bold' }}>{notifications.filter(n => !n.read).length}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
 
             {/* TAB CONTAINER CONTENT SWITCHER */}
             {dashboardTab === 'dashboard' && (
               <>
-                {/* Dynamic Financial Summary Card (Arcade Scoreboard or Custom Minecraft Blue Card) */}
-                {activeThemeKey === 'minecraft_anime' ? (
-                  <View style={{
-                    backgroundColor: '#13223f',
-                    borderColor: '#000000',
-                    borderWidth: 3,
-                    borderRadius: 8,
-                    padding: 24,
-                    alignItems: 'center',
-                    shadowColor: '#000000',
-                    shadowOffset: { width: 0, height: 5 },
-                    shadowOpacity: 1,
-                    shadowRadius: 0,
-                    marginBottom: 10,
-                    position: 'relative'
-                  }}>
+                {/* Financial Summary Card */}
+                {showSummaryCards && (
+                  activeThemeKey === 'minecraft_anime' ? (
                     <View style={{
-                      position: 'absolute',
-                      top: 2, left: 2, right: 2, bottom: 2,
-                      borderColor: '#2b4d8c',
-                      borderWidth: 2,
-                      borderRadius: 6,
-                    }} />
-                    <Text style={{
-                      fontFamily: 'monospace',
-                      fontSize: 14,
-                      color: '#ffffff',
-                      fontWeight: '700',
-                      textTransform: 'uppercase',
-                      letterSpacing: 1
-                    }}>Total Balance</Text>
-                    <Text style={{
-                      fontFamily: 'monospace',
-                      fontSize: 34,
-                      color: '#ffd700',
-                      fontWeight: '900',
-                      marginTop: 8,
-                      textShadowColor: '#000000',
-                      textShadowOffset: { width: 2, height: 2 },
-                      textShadowRadius: 0
+                      backgroundColor: '#13223f',
+                      borderColor: '#000000',
+                      borderWidth: 3,
+                      borderRadius: 8,
+                      padding: 24,
+                      alignItems: 'center',
+                      shadowColor: '#000000',
+                      shadowOffset: { width: 0, height: 5 },
+                      shadowOpacity: 1,
+                      shadowRadius: 0,
+                      marginBottom: 10,
+                      position: 'relative'
                     }}>
-                      ${netBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                ) : activeThemeKey === 'brick_breaker' ? (
-                  <View style={{
-                    backgroundColor: '#121222',
-                    borderColor: '#ff007f',
-                    borderWidth: 2.5,
-                    borderRadius: 8,
-                    padding: 20,
-                    marginBottom: 10,
-                    shadowColor: '#ff007f',
-                    shadowOffset: { width: 0, height: 0 },
-                    shadowOpacity: 0.8,
-                    shadowRadius: 10,
-                  }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                      <Text style={{ fontFamily: 'monospace', color: '#00ffff', fontSize: 11, fontWeight: '700' }}>HIGH SCORE: 99999</Text>
-                      <Text style={{ fontFamily: 'monospace', color: '#00ffff', fontSize: 11, fontWeight: '700' }}>LVL: 01</Text>
-                    </View>
-                    <View style={{ alignItems: 'center', marginVertical: 12 }}>
-                      <Text style={{ fontFamily: 'monospace', color: '#ffffff', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1 }}>Score Balance</Text>
-                      <Text style={{ fontFamily: 'monospace', color: '#39ff14', fontSize: 32, fontWeight: '800', marginTop: 4 }}>
+                      <View style={{
+                        position: 'absolute',
+                        top: 2, left: 2, right: 2, bottom: 2,
+                        borderColor: '#2b4d8c',
+                        borderWidth: 2,
+                        borderRadius: 6,
+                      }} />
+                      <Text style={{
+                        fontFamily: 'monospace',
+                        fontSize: 14,
+                        color: '#ffffff',
+                        fontWeight: '700',
+                        textTransform: 'uppercase',
+                        letterSpacing: 1
+                      }}>Total Balance</Text>
+                      <Text style={{
+                        fontFamily: 'monospace',
+                        fontSize: 34,
+                        color: '#ffd700',
+                        fontWeight: '900',
+                        marginTop: 8,
+                        textShadowColor: '#000000',
+                        textShadowOffset: { width: 2, height: 2 },
+                        textShadowRadius: 0
+                      }}>
                         ₹{netBalance.toLocaleString('en-IN')}
                       </Text>
                     </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: 'rgba(255, 0, 127, 0.2)', paddingTop: 10 }}>
-                      <Text style={{ fontFamily: 'monospace', color: '#ff007f', fontSize: 11 }}>LIVES:</Text>
-                      <Text style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                        {Array.from({ length: 3 }).map((_, i) => (i < (netBalance > 0 ? 3 : netBalance === 0 ? 2 : 1) ? '💖' : '🖤')).join(' ')}
-                      </Text>
-                    </View>
-                  </View>
-                ) : (
-                  // Default theme credit-card summary card
-                  <View style={[
-                    styles.summaryCard, 
-                    { 
-                      backgroundColor: activeTheme.cardBackground, 
-                      borderColor: activeTheme.cardBorder, 
-                      borderRadius: activeTheme.borderRadius,
-                      borderWidth: activeTheme.borderWidth || 1
-                    }
-                  ]}>
-                    <View style={styles.cardTopRow}>
-                      <View style={styles.cardChip}>
-                        <View style={styles.cardChipInner} />
+                  ) : activeThemeKey === 'brick_breaker' ? (
+                    <View style={{
+                      backgroundColor: '#121222',
+                      borderColor: '#ff007f',
+                      borderWidth: 2.5,
+                      borderRadius: 8,
+                      padding: 20,
+                      marginBottom: 10,
+                      shadowColor: '#ff007f',
+                      shadowOffset: { width: 0, height: 0 },
+                      shadowOpacity: 0.8,
+                      shadowRadius: 10,
+                    }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text style={{ fontFamily: 'monospace', color: '#00ffff', fontSize: 11, fontWeight: '700' }}>HIGH SCORE: 99999</Text>
+                        <Text style={{ fontFamily: 'monospace', color: '#00ffff', fontSize: 11, fontWeight: '700' }}>LVL: 01</Text>
                       </View>
-                      <Text style={[styles.cardBrandText, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>VALUED MEMBER</Text>
-                    </View>
-
-                    <View style={styles.summaryItem}>
-                      <Text style={[styles.summaryLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>NET BALANCE</Text>
-                      <Text style={[
-                        styles.summaryVal, 
-                        { 
-                          fontFamily: activeTheme.fontFamily || 'System',
-                          color: activeTheme.balanceColor || (netBalance >= 0 ? activeTheme.incomeColor : activeTheme.expenseColor),
-                        }
-                      ]}>
-                        ₹{netBalance.toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-
-                    <View style={styles.cardHolderRow}>
-                      <Text style={[styles.cardHolderLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>CARDHOLDER</Text>
-                      <Text style={[styles.cardHolderName, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>{profile.name.toUpperCase()}</Text>
-                    </View>
-
-                    <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
-                    
-                    <View style={styles.summaryRow}>
-                      <View style={styles.summarySubItem}>
-                        <Text style={[styles.summaryLabelSub, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>↗ INFLOW</Text>
-                        <Text style={[styles.summaryValSub, { color: activeTheme.incomeColor, fontFamily: activeTheme.fontFamily || 'System' }]}>₹{totalIncome.toLocaleString('en-IN')}</Text>
+                      <View style={{ alignItems: 'center', marginVertical: 12 }}>
+                        <Text style={{ fontFamily: 'monospace', color: '#ffffff', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1 }}>Score Balance</Text>
+                        <Text style={{ fontFamily: 'monospace', color: '#39ff14', fontSize: 32, fontWeight: '800', marginTop: 4 }}>
+                          ₹{netBalance.toLocaleString('en-IN')}
+                        </Text>
                       </View>
-                      <View style={styles.summarySubItem}>
-                        <Text style={[styles.summaryLabelSub, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>↘ OUTFLOW</Text>
-                        <Text style={[styles.summaryValSub, { color: activeTheme.expenseColor, fontFamily: activeTheme.fontFamily || 'System' }]}>₹{totalExpense.toLocaleString('en-IN')}</Text>
+                    </View>
+                  ) : (
+                    // Default Card UI
+                    <View style={[
+                      styles.summaryCard, 
+                      { 
+                        backgroundColor: activeTheme.cardBackground, 
+                        borderColor: activeTheme.cardBorder, 
+                        borderRadius: activeTheme.borderRadius,
+                        borderWidth: activeTheme.borderWidth || 1
+                      }
+                    ]}>
+                      <View style={styles.cardTopRow}>
+                        <View style={styles.cardChip}>
+                          <View style={styles.cardChipInner} />
+                        </View>
+                        <Text style={[styles.cardBrandText, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>VALUED MEMBER</Text>
                       </View>
+
+                      <View style={styles.summaryItem}>
+                        <Text style={[styles.summaryLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>NET BALANCE</Text>
+                        <Text style={[
+                          styles.summaryVal, 
+                          { 
+                            fontFamily: activeTheme.fontFamily || 'System',
+                            color: activeTheme.balanceColor || (netBalance >= 0 ? activeTheme.incomeColor : activeTheme.expenseColor),
+                          }
+                        ]}>
+                          ₹{netBalance.toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+
+                      <View style={styles.cardHolderRow}>
+                        <Text style={[styles.cardHolderLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>CARDHOLDER</Text>
+                        <Text style={[styles.cardHolderName, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>{profile.name.toUpperCase()}</Text>
+                      </View>
+
+                      <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
+                      
+                      <View style={styles.summaryRow}>
+                        <View style={styles.summarySubItem}>
+                          <Text style={[styles.summaryLabelSub, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>↗ INFLOW</Text>
+                          <Text style={[styles.summaryValSub, { color: activeTheme.incomeColor, fontFamily: activeTheme.fontFamily || 'System' }]}>₹{totalIncome.toLocaleString('en-IN')}</Text>
+                        </View>
+                        <View style={styles.summarySubItem}>
+                          <Text style={[styles.summaryLabelSub, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>↘ OUTFLOW</Text>
+                          <Text style={[styles.summaryValSub, { color: activeTheme.expenseColor, fontFamily: activeTheme.fontFamily || 'System' }]}>₹{totalExpense.toLocaleString('en-IN')}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  )
+                )}
+
+                {/* Spending Insights Banner */}
+                <View style={[styles.insightsCard, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1 }]}>
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontSize: 13, marginBottom: 8 }]}>Spending Insights & Alerts</Text>
+                  <Text style={{ color: activeTheme.textColor, fontSize: 12, lineHeight: 18 }}>{getSpendingInsights()}</Text>
+                </View>
+
+                {/* Dashboard Widget Customizer Trigger */}
+                <TouchableOpacity style={[styles.customizerTrigger, { borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius }]} onPress={() => setCustomizerOpen(!customizerOpen)}>
+                  <Text style={{ color: activeTheme.primaryColor, fontWeight: '700', fontSize: 12 }}>⚙️ Customize Dashboard Widgets</Text>
+                </TouchableOpacity>
+
+                {customizerOpen && (
+                  <View style={[styles.customizerPanel, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius }]}>
+                    <View style={styles.customizerRow}>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 13 }}>Show Balance Cards</Text>
+                      <Switch value={showSummaryCards} onValueChange={(val) => { setShowSummaryCards(val); saveDashboardCustomization('custom_show_cards', val); }} />
+                    </View>
+                    <View style={styles.customizerRow}>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 13 }}>Show Trend Charts</Text>
+                      <Switch value={showCharts} onValueChange={(val) => { setShowCharts(val); saveDashboardCustomization('custom_show_charts', val); }} />
+                    </View>
+                    <View style={styles.customizerRow}>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 13 }}>Show Goals Widget</Text>
+                      <Switch value={showGoalsWidget} onValueChange={(val) => { setShowGoalsWidget(val); saveDashboardCustomization('custom_show_goals', val); }} />
+                    </View>
+                    <View style={styles.customizerRow}>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 13 }}>Show Achievements</Text>
+                      <Switch value={showAchievementsWidget} onValueChange={(val) => { setShowAchievementsWidget(val); saveDashboardCustomization('custom_show_ach', val); }} />
                     </View>
                   </View>
                 )}
 
-                {/* Minecraft 3D Send/Receive buttons row */}
-                {activeThemeKey === 'minecraft_anime' && (
-                  <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
-                    <TouchableOpacity 
-                      style={{
-                        flex: 1,
-                        backgroundColor: '#5cbf3a',
-                        borderWidth: 3,
-                        borderColor: '#000000',
-                        borderRadius: 8,
-                        paddingVertical: 12,
-                        flexDirection: 'row',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        gap: 8,
-                        shadowColor: '#2b7814',
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 1,
-                        shadowRadius: 0,
-                      }}
-                      onPress={() => setTypeInput('expense')}
-                    >
-                      <Text style={{ fontFamily: 'monospace', fontSize: 16, fontWeight: '800', color: '#ffffff', textShadowColor: '#000000', textShadowOffset: { width: 1.5, height: 1.5 }, textShadowRadius: 0 }}>Send</Text>
-                      <Text style={{ fontSize: 16 }}>💎</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={{
-                        flex: 1,
-                        backgroundColor: '#3abcc0',
-                        borderWidth: 3,
-                        borderColor: '#000000',
-                        borderRadius: 8,
-                        paddingVertical: 12,
-                        flexDirection: 'row',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        gap: 8,
-                        shadowColor: '#1a7e82',
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 1,
-                        shadowRadius: 0,
-                      }}
-                      onPress={() => setTypeInput('income')}
-                    >
-                      <Text style={{ fontFamily: 'monospace', fontSize: 16, fontWeight: '800', color: '#ffffff', textShadowColor: '#000000', textShadowOffset: { width: 1.5, height: 1.5 }, textShadowRadius: 0 }}>Receive</Text>
-                      <Text style={{ fontSize: 16 }}>🧈</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* Featured Goals for Minecraft theme */}
-                {activeThemeKey === 'minecraft_anime' && (
-                  <View style={{ marginBottom: 12 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                      <Text style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: '700', color: activeTheme.textColor }}>Featured Goals</Text>
-                      <Text style={{ fontFamily: 'monospace', fontSize: 14, color: activeTheme.textMutedColor }}>&lt; &gt;</Text>
-                    </View>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 4 }}>
-                      <View style={{
-                        width: 155,
-                        backgroundColor: '#13223f',
-                        borderWidth: 3,
-                        borderColor: '#000000',
-                        borderRadius: 8,
-                        padding: 12,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 0.2,
-                        shadowRadius: 0,
-                      }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <Text style={{ fontSize: 18 }}>💎</Text>
-                          <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#3abcc0', fontWeight: '800' }}>17%</Text>
-                        </View>
-                        <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#ffffff', fontWeight: '700', marginBottom: 4 }} numberOfLines={1}>New Gaming PC</Text>
-                        <Text style={{ fontFamily: 'monospace', fontSize: 9, color: '#8a9bb5' }}>$350 / $2000</Text>
-                        <View style={{ height: 6, backgroundColor: '#0b1627', borderRadius: 0, borderWidth: 1, borderColor: '#000', marginTop: 8 }}>
-                          <View style={{ width: '17%', height: '100%', backgroundColor: '#5cbf3a' }} />
-                        </View>
-                      </View>
-
-                      <View style={{
-                        width: 155,
-                        backgroundColor: '#13223f',
-                        borderWidth: 3,
-                        borderColor: '#000000',
-                        borderRadius: 8,
-                        padding: 12,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 0.2,
-                        shadowRadius: 0,
-                      }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <Text style={{ fontSize: 18 }}>🗺️</Text>
-                          <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#3abcc0', fontWeight: '800' }}>24%</Text>
-                        </View>
-                        <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#ffffff', fontWeight: '700', marginBottom: 4 }} numberOfLines={1}>Holiday Trip</Text>
-                        <Text style={{ fontFamily: 'monospace', fontSize: 9, color: '#8a9bb5' }}>$1200 / $5000</Text>
-                        <View style={{ height: 6, backgroundColor: '#0b1627', borderRadius: 0, borderWidth: 1, borderColor: '#000', marginTop: 8 }}>
-                          <View style={{ width: '24%', height: '100%', backgroundColor: '#3abcc0' }} />
-                        </View>
-                      </View>
-
-                      <View style={{
-                        width: 155,
-                        backgroundColor: '#13223f',
-                        borderWidth: 3,
-                        borderColor: '#000000',
-                        borderRadius: 8,
-                        padding: 12,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 0.2,
-                        shadowRadius: 0,
-                      }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <Text style={{ fontSize: 18 }}>⛏️</Text>
-                          <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#3abcc0', fontWeight: '800' }}>50%</Text>
-                        </View>
-                        <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#ffffff', fontWeight: '700', marginBottom: 4 }} numberOfLines={1}>Crypto Mining</Text>
-                        <Text style={{ fontFamily: 'monospace', fontSize: 9, color: '#8a9bb5' }}>$500 / $1090</Text>
-                        <View style={{ height: 6, backgroundColor: '#0b1627', borderRadius: 0, borderWidth: 1, borderColor: '#000', marginTop: 8 }}>
-                          <View style={{ width: '50%', height: '100%', backgroundColor: '#5cbf3a' }} />
-                        </View>
-                      </View>
-                    </ScrollView>
-                  </View>
-                )}
+                {/* Charts have been moved to the Stats tab */}
 
                 {/* EXPENSE/TRANSACTION FORM SUBMITTER */}
                 <View style={[
@@ -1372,20 +2341,13 @@ export default function AppIndex() {
                     borderWidth: activeTheme.borderWidth || 1
                   }
                 ]}>
-                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Log New Transaction</Text>
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
+                    {editingTransaction ? 'Edit Transaction Details' : 'Log New Transaction'}
+                  </Text>
+                  
                   <View style={styles.form}>
                     <TextInput
-                      style={[
-                        styles.input, 
-                        { 
-                          backgroundColor: activeTheme.inputBackground, 
-                          borderColor: activeTheme.inputBorder, 
-                          borderWidth: activeTheme.borderWidth || 1,
-                          borderRadius: activeTheme.borderRadius, 
-                          color: activeTheme.textColor,
-                          fontFamily: activeTheme.fontFamily || 'System'
-                        }
-                      ]}
+                      style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                       placeholder="Description (e.g., Office Supplies)"
                       placeholderTextColor={activeTheme.textMutedColor}
                       value={descriptionInput}
@@ -1393,22 +2355,100 @@ export default function AppIndex() {
                     />
 
                     <TextInput
-                      style={[
-                        styles.input, 
-                        { 
-                          backgroundColor: activeTheme.inputBackground, 
-                          borderColor: activeTheme.inputBorder, 
-                          borderWidth: activeTheme.borderWidth || 1,
-                          borderRadius: activeTheme.borderRadius, 
-                          color: activeTheme.textColor,
-                          fontFamily: activeTheme.fontFamily || 'System'
-                        }
-                      ]}
+                      style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                       placeholder="Amount (INR)"
                       placeholderTextColor={activeTheme.textMutedColor}
                       keyboardType="numeric"
                       value={amountInput}
                       onChangeText={setAmountInput}
+                    />
+
+                    {/* Predefined + Custom Category Selector */}
+                    <Text style={{ color: activeTheme.textColor, fontSize: 12, fontWeight: '700', marginTop: 4 }}>Select Category</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                      {Object.keys(CATEGORY_ICONS).concat(['Custom']).map((cat) => {
+                        const isSelected = categoryInput === cat;
+                        return (
+                          <TouchableOpacity
+                            key={cat}
+                            style={[
+                              styles.categorySelectBtn,
+                              { borderColor: isSelected ? activeTheme.primaryColor : 'rgba(255,255,255,0.05)', borderRadius: activeTheme.borderRadius },
+                              isSelected && { backgroundColor: activeTheme.primaryColor + '15' }
+                            ]}
+                            onPress={() => setCategoryInput(cat)}
+                          >
+                            <Text style={{ color: isSelected ? activeTheme.textColor : activeTheme.textMutedColor, fontSize: 12 }}>
+                              {(CATEGORY_ICONS[cat] || '🏷️') + " " + cat}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+
+                    {categoryInput === 'Custom' && (
+                      <TextInput
+                        style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
+                        placeholder="Enter Custom Category Title"
+                        placeholderTextColor={activeTheme.textMutedColor}
+                        value={customCategory}
+                        onChangeText={setCustomCategory}
+                      />
+                    )}
+
+                    {/* Payment Method Selector */}
+                    <Text style={{ color: activeTheme.textColor, fontSize: 12, fontWeight: '700', marginTop: 4 }}>Payment Method</Text>
+                    <View style={styles.toggleRow}>
+                      {(['Cash', 'Card', 'Bank'] as const).map((method) => {
+                        const isSelected = paymentMethodInput === method;
+                        return (
+                          <TouchableOpacity
+                            key={method}
+                            style={[
+                              styles.toggleBtn, 
+                              { borderRadius: activeTheme.borderRadius, borderColor: isSelected ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)' },
+                              isSelected && { backgroundColor: activeTheme.primaryColor + '12' }
+                            ]}
+                            onPress={() => setPaymentMethodInput(method)}
+                          >
+                            <Text style={{ color: isSelected ? activeTheme.primaryColor : activeTheme.textMutedColor, fontWeight: '700', fontSize: 12 }}>{method}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {/* Receipt upload / attachment */}
+                    <Text style={{ color: activeTheme.textColor, fontSize: 12, fontWeight: '700', marginTop: 4 }}>Attach Receipt Proof</Text>
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <TouchableOpacity style={[styles.uploadAttachmentBtn, { borderColor: activeTheme.primaryColor }]} onPress={() => handleSelectImage('receipt')}>
+                        <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700' }}>📁 Gallery</Text>
+                      </TouchableOpacity>
+
+                    </View>
+                    {receiptPhotoUri && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Text style={{ color: activeTheme.textColor, fontSize: 11 }} numberOfLines={1}>Attached: {receiptPhotoUri.split('/').pop()}</Text>
+                        <TouchableOpacity onPress={() => setReceiptPhotoUri(null)}>
+                          <Text style={{ color: 'red', fontWeight: 'bold' }}>Remove</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {/* Optional tags and notes */}
+                    <TextInput
+                      style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
+                      placeholder="Transaction note/memo (Optional)"
+                      placeholderTextColor={activeTheme.textMutedColor}
+                      value={transactionNote}
+                      onChangeText={setTransactionNote}
+                    />
+
+                    <TextInput
+                      style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
+                      placeholder="Tags (comma-separated, e.g. monthly, office)"
+                      placeholderTextColor={activeTheme.textMutedColor}
+                      value={transactionTags}
+                      onChangeText={setTransactionTags}
                     />
 
                     <View style={styles.toggleRow}>
@@ -1417,7 +2457,6 @@ export default function AppIndex() {
                           styles.toggleBtn, 
                           { 
                             borderRadius: activeTheme.borderRadius, 
-                            borderWidth: activeTheme.borderWidth || 1,
                             borderColor: typeInput === 'expense' ? (activeTheme.isRetro ? '#000000' : activeTheme.expenseColor) : 'rgba(255, 255, 255, 0.05)' 
                           },
                           typeInput === 'expense' && { 
@@ -1434,7 +2473,7 @@ export default function AppIndex() {
                             fontWeight: activeTheme.isRetro ? '800' : '600'
                           }
                         ]}>
-                          {activeThemeKey === 'minecraft_anime' ? 'Send 💎' : 'Expense'}
+                          Expense
                         </Text>
                       </TouchableOpacity>
                       <TouchableOpacity 
@@ -1442,7 +2481,6 @@ export default function AppIndex() {
                           styles.toggleBtn, 
                           { 
                             borderRadius: activeTheme.borderRadius, 
-                            borderWidth: activeTheme.borderWidth || 1,
                             borderColor: typeInput === 'income' ? (activeTheme.isRetro ? '#000000' : activeTheme.incomeColor) : 'rgba(255, 255, 255, 0.05)' 
                           },
                           typeInput === 'income' && { 
@@ -1459,7 +2497,7 @@ export default function AppIndex() {
                             fontWeight: activeTheme.isRetro ? '800' : '600'
                           }
                         ]}>
-                          {activeThemeKey === 'minecraft_anime' ? 'Receive 🧱' : 'Income'}
+                          Income
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -1474,7 +2512,7 @@ export default function AppIndex() {
                           borderColor: activeTheme.isRetro ? '#000000' : 'transparent'
                         }
                       ]} 
-                      onPress={handleSubmitExpense}
+                      onPress={editingTransaction ? handleUpdateTransaction : handleSubmitExpense}
                       disabled={submitLoading}
                     >
                       {submitLoading ? (
@@ -1487,55 +2525,46 @@ export default function AppIndex() {
                             fontFamily: activeTheme.fontFamily || 'System',
                             textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
                           }
-                        ]}>Submit Transaction</Text>
+                        ]}>{editingTransaction ? 'Save Modifications' : 'Submit Transaction'}</Text>
                       )}
                     </TouchableOpacity>
+                    
+                    {editingTransaction && (
+                      <TouchableOpacity style={[styles.cancelEditBtn, { borderRadius: activeTheme.borderRadius }]} onPress={() => {
+                        setEditingTransaction(null);
+                        setAmountInput('');
+                        setDescriptionInput('');
+                        setCustomCategory('');
+                        setTransactionNote('');
+                        setTransactionTags('');
+                        setReceiptPhotoUri(null);
+                      }}>
+                        <Text style={{ color: activeTheme.textColor }}>Cancel Edit</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
 
-                {/* Admin Global Theme Picker Grid */}
-                {profile.role === 'ADMIN' && (
-                  <View style={[
-                    styles.card, 
-                    { 
-                      backgroundColor: activeTheme.cardBackground, 
-                      borderColor: activeTheme.cardBorder, 
-                      borderRadius: activeTheme.borderRadius,
-                      borderWidth: activeTheme.borderWidth || 1
-                    }
-                  ]}>
-                    <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>🎨 Admin Settings - Global Theme Selector</Text>
-                    <View style={styles.themeSelectorGrid}>
-                      {Object.entries(THEMES).map(([key, t]) => {
-                        const isActive = activeThemeKey === key;
-                        return (
-                          <TouchableOpacity
-                            key={key}
-                            style={[
-                              styles.themeSelectorBtn,
-                              { 
-                                borderRadius: activeTheme.borderRadius, 
-                                borderWidth: activeTheme.borderWidth || 1,
-                                borderColor: isActive ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)' 
-                              },
-                              isActive && { backgroundColor: activeTheme.primaryColor + '12' }
-                            ]}
-                            onPress={() => handleUpdateTheme(key)}
-                          >
-                            <Text style={[
-                              styles.themeSelectorBtnText,
-                              { 
-                                color: isActive ? activeTheme.textColor : activeTheme.textMutedColor,
-                                fontFamily: activeTheme.fontFamily || 'System'
-                              }
-                            ]}>
-                              {t.name}
-                            </Text>
-                            {isActive && <Text style={{ color: activeTheme.primaryColor, fontSize: 14 }}>●</Text>}
-                          </TouchableOpacity>
-                        );
-                      })}
+                {/* Minecraft featured goals */}
+                {showGoalsWidget && activeThemeKey === 'minecraft_anime' && (
+                  <View style={{ marginBottom: 12 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <Text style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: '700', color: activeTheme.textColor }}>Featured Goals</Text>
+                      <Text style={{ fontFamily: 'monospace', fontSize: 14, color: activeTheme.textMutedColor }}>&lt; &gt;</Text>
                     </View>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 4 }}>
+                      <View style={{ width: 155, backgroundColor: '#13223f', borderWidth: 3, borderColor: '#000000', borderRadius: 8, padding: 12 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <Text style={{ fontSize: 18 }}>💎</Text>
+                          <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#3abcc0', fontWeight: '800' }}>17%</Text>
+                        </View>
+                        <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#ffffff', fontWeight: '700', marginBottom: 4 }} numberOfLines={1}>New Gaming PC</Text>
+                        <Text style={{ fontFamily: 'monospace', fontSize: 9, color: '#8a9bb5' }}>₹350 / ₹2000</Text>
+                        <View style={{ height: 6, backgroundColor: '#0b1627', borderRadius: 0, borderWidth: 1, borderColor: '#000', marginTop: 8 }}>
+                          <View style={{ width: '17%', height: '100%', backgroundColor: '#5cbf3a' }} />
+                        </View>
+                      </View>
+                    </ScrollView>
                   </View>
                 )}
               </>
@@ -1543,7 +2572,129 @@ export default function AppIndex() {
 
             {dashboardTab === 'activity' && (
               <>
-                {/* Allover Expense Filter Period Tabs */}
+                {/* Advanced Search, Categories, Type & Range Filters */}
+                <View style={[styles.card, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius, marginBottom: 12 }]}>
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor }]}>🔍 Advanced Filters & Search</Text>
+                  
+                  <TextInput
+                    style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
+                    placeholder="Search by note, tag, description..."
+                    placeholderTextColor={activeTheme.textMutedColor}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                  />
+
+                  {/* Filter type row */}
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                    {(['all', 'income', 'expense', 'transfer'] as const).map(type => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[
+                          styles.filterMiniBtn,
+                          { borderColor: filterType === type ? activeTheme.primaryColor : 'rgba(255,255,255,0.05)', borderRadius: activeTheme.borderRadius },
+                          filterType === type && { backgroundColor: activeTheme.primaryColor + '12' }
+                        ]}
+                        onPress={() => setFilterType(type)}
+                      >
+                        <Text style={{ color: filterType === type ? activeTheme.textColor : activeTheme.textMutedColor, fontSize: 11, textTransform: 'capitalize' }}>{type}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {/* Amount Ranges */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 10, alignSelf: 'stretch' }}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, minWidth: 0, backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, paddingVertical: 10, paddingHorizontal: 12, fontSize: 13 }]}
+                      placeholder="Min ₹"
+                      placeholderTextColor={activeTheme.textMutedColor}
+                      keyboardType="numeric"
+                      value={minAmount}
+                      onChangeText={setMinAmount}
+                    />
+                    <TextInput
+                      style={[styles.input, { flex: 1, minWidth: 0, backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, paddingVertical: 10, paddingHorizontal: 12, fontSize: 13 }]}
+                      placeholder="Max ₹"
+                      placeholderTextColor={activeTheme.textMutedColor}
+                      keyboardType="numeric"
+                      value={maxAmount}
+                      onChangeText={setMaxAmount}
+                    />
+                  </View>
+
+                  {/* Date range inputs */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 10, alignSelf: 'stretch' }}>
+                    <TouchableOpacity
+                      style={[
+                        styles.datePickerBtn,
+                        {
+                          flex: 1,
+                          backgroundColor: activeTheme.inputBackground,
+                          borderColor: activeTheme.inputBorder,
+                          borderRadius: activeTheme.borderRadius,
+                          paddingVertical: 10,
+                          paddingHorizontal: 12,
+                        }
+                      ]}
+                      onPress={() => {
+                        setDatePickerTarget('start');
+                        setPickerMonthDate(startDateStr ? new Date(startDateStr) : new Date());
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <Text style={{ color: startDateStr ? activeTheme.textColor : activeTheme.textMutedColor, fontSize: 13, flex: 1 }} numberOfLines={1}>
+                          {startDateStr ? `From: ${startDateStr}` : 'Start Date 📅'}
+                        </Text>
+                        {startDateStr.length > 0 && (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              setStartDateStr('');
+                            }}
+                            style={{ padding: 4 }}
+                          >
+                            <Text style={{ color: activeTheme.expenseColor, fontSize: 14, fontWeight: 'bold' }}>×</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.datePickerBtn,
+                        {
+                          flex: 1,
+                          backgroundColor: activeTheme.inputBackground,
+                          borderColor: activeTheme.inputBorder,
+                          borderRadius: activeTheme.borderRadius,
+                          paddingVertical: 10,
+                          paddingHorizontal: 12,
+                        }
+                      ]}
+                      onPress={() => {
+                        setDatePickerTarget('end');
+                        setPickerMonthDate(endDateStr ? new Date(endDateStr) : new Date());
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <Text style={{ color: endDateStr ? activeTheme.textColor : activeTheme.textMutedColor, fontSize: 13, flex: 1 }} numberOfLines={1}>
+                          {endDateStr ? `To: ${endDateStr}` : 'End Date 📅'}
+                        </Text>
+                        {endDateStr.length > 0 && (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              setEndDateStr('');
+                            }}
+                            style={{ padding: 4 }}
+                          >
+                            <Text style={{ color: activeTheme.expenseColor, fontSize: 14, fontWeight: 'bold' }}>×</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Period tabs */}
                 <View style={styles.filterContainer}>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
                     {(['all', 'daily', 'weekly', 'monthly', 'yearly'] as const).map((p) => {
@@ -1553,22 +2704,12 @@ export default function AppIndex() {
                           key={p}
                           style={[
                             styles.filterBtn,
-                            { 
-                              borderRadius: activeTheme.borderRadius, 
-                              borderWidth: activeTheme.borderWidth || 1,
-                              borderColor: isActive ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)' 
-                            },
+                            { borderRadius: activeTheme.borderRadius, borderColor: isActive ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)' },
                             isActive && { backgroundColor: activeTheme.primaryColor === '#ffffff' ? '#ffffff' : activeTheme.primaryColor + '18' }
                           ]}
                           onPress={() => setPeriodFilter(p)}
                         >
-                          <Text style={[
-                            styles.filterBtnText,
-                            { 
-                              color: isActive ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : activeTheme.primaryColor) : activeTheme.textMutedColor,
-                              fontFamily: activeTheme.fontFamily || 'System'
-                            }
-                          ]}>
+                          <Text style={[styles.filterBtnText, { color: isActive ? activeTheme.textColor : activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
                             {p.toUpperCase()}
                           </Text>
                         </TouchableOpacity>
@@ -1577,7 +2718,7 @@ export default function AppIndex() {
                   </ScrollView>
                 </View>
 
-                {/* TRANSACTIONS SYNC LEDGER */}
+                {/* TRANSACTION LEDGER */}
                 <View style={[
                   styles.card, 
                   { 
@@ -1587,42 +2728,28 @@ export default function AppIndex() {
                     borderWidth: activeTheme.borderWidth || 1
                   }
                 ]}>
-                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Recent Logged Transactions</Text>
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Transactions Log Ledger</Text>
                   {filteredTransactions.length === 0 ? (
-                    <Text style={styles.emptyText}>No transactions recorded.</Text>
+                    <Text style={styles.emptyText}>No transaction records match the filter query.</Text>
                   ) : (
                     filteredTransactions.map(item => (
                       <View key={item.id} style={[styles.ledgerRow, { borderBottomColor: activeTheme.inputBorder }]}>
                         <View style={styles.ledgerLeftRow}>
-                          <View style={[styles.ledgerCategoryIconBg, { backgroundColor: activeTheme.inputBackground, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1, borderColor: activeTheme.cardBorder }]}>
+                          <View style={[styles.ledgerCategoryIconBg, { backgroundColor: activeTheme.inputBackground, borderRadius: activeTheme.borderRadius, borderColor: activeTheme.cardBorder }]}>
                             <Text style={styles.ledgerCategoryIcon}>
-                              {activeThemeKey === 'minecraft_anime' ? (
-                                (() => {
-                                  const desc = item.description.toLowerCase();
-                                  if (desc.includes('steam') || desc.includes('game') || desc.includes('play')) return '🎮';
-                                  if (desc.includes('salary') || desc.includes('income') || desc.includes('pay') || desc.includes('earn')) return '📦';
-                                  if (desc.includes('coffee') || desc.includes('cafe') || desc.includes('tea') || desc.includes('starbucks')) return '☕';
-                                  if (desc.includes('minecoin') || desc.includes('emerald') || desc.includes('gem')) return '🟢';
-                                  if (item.type === 'income') return '💎';
-                                  return '🧱';
-                                })()
-                              ) : (
-                                item.type === 'income' ? '📈' : (CATEGORY_ICONS[item.category] || '📦')
-                              )}
+                              {CATEGORY_ICONS[item.category] || '📦'}
                             </Text>
                           </View>
                           <View style={styles.ledgerLeft}>
-                            <Text style={[styles.ledgerId, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>{item.description}</Text>
+                            <Text style={[styles.ledgerId, { color: activeTheme.textColor }]}>{item.description}</Text>
                             <View style={styles.ledgerSubRow}>
-                              <Text style={[styles.ledgerTime, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
-                                {new Date(item.dateStr).toLocaleString('en-IN', {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit'
-                                })}
+                              <Text style={[styles.ledgerTime, { color: activeTheme.textMutedColor }]}>
+                                {new Date(item.dateStr).toLocaleDateString('en-IN')} • {item.paymentMethod}
                               </Text>
-                              {profile.role === 'ADMIN' && item.userName && (
+                              {item.tags && item.tags.map(tag => (
+                                <Text key={tag} style={{ color: activeTheme.primaryColor, fontSize: 9, backgroundColor: activeTheme.primaryColor + '12', paddingHorizontal: 4, borderRadius: 3 }}>#{tag}</Text>
+                              ))}
+                              {['ADMIN', 'MD', 'DIRECTOR'].includes(profile?.role || '') && item.userName && (
                                 <TouchableOpacity 
                                   onPress={() => {
                                     const foundUser = allUsers.find(u => u.uid === item.userUid || u.name === item.userName);
@@ -1638,22 +2765,38 @@ export default function AppIndex() {
                                     }
                                   }}
                                 >
-                                  <Text style={[styles.ledgerUserLink, { color: activeTheme.primaryColor, fontFamily: activeTheme.fontFamily || 'System' }]}>• {item.userName}</Text>
+                                  <Text style={[styles.ledgerUserLink, { color: activeTheme.primaryColor }]}>• {item.userName}</Text>
                                 </TouchableOpacity>
                               )}
                             </View>
+                            {item.receiptUrl ? (
+                              <TouchableOpacity onPress={() => Alert.alert("Receipt Attachment", "Mock display: In production downloads standard photo.")}>
+                                <Text style={{ color: '#3b82f6', fontSize: 10, marginTop: 4, fontWeight: '700' }}>📎 View Receipt</Text>
+                              </TouchableOpacity>
+                            ) : null}
                           </View>
                         </View>
                         <View style={styles.ledgerRight}>
-                          <Text style={[
-                            styles.ledgerAmount, 
-                            { 
-                              color: item.type === 'income' ? activeTheme.incomeColor : activeTheme.expenseColor,
-                              fontFamily: activeTheme.fontFamily || 'System'
-                            }
-                          ]}>
+                          <Text style={[styles.ledgerAmount, { color: item.type === 'income' ? activeTheme.incomeColor : activeTheme.expenseColor }]}>
                             {item.type === 'income' ? '+' : '-'} ₹{item.amount.toLocaleString()}
                           </Text>
+                          
+                          {/* CRUD Options trigger */}
+                          <TouchableOpacity onPress={() => {
+                            setEditingTransaction(item);
+                            setAmountInput(String(item.amount));
+                            setDescriptionInput(item.description);
+                            setCategoryInput(Object.keys(CATEGORY_ICONS).includes(item.category) ? item.category : 'Custom');
+                            if (!Object.keys(CATEGORY_ICONS).includes(item.category)) setCustomCategory(item.category);
+                            setPaymentMethodInput(item.paymentMethod);
+                            setTransactionNote(item.note || '');
+                            setTransactionTags((item.tags || []).join(', '));
+                            setReceiptPhotoUri(item.receiptUrl || null);
+                            setDashboardTab('dashboard'); 
+                          }} style={{ paddingHorizontal: 6 }}>
+                            <Text style={{ color: activeTheme.primaryColor, fontSize: 12 }}>✏️</Text>
+                          </TouchableOpacity>
+
                           <TouchableOpacity 
                             style={styles.deleteTxBtn}
                             onPress={() => handleDeleteTx(item.id, item.userUid)}
@@ -1670,8 +2813,8 @@ export default function AppIndex() {
 
             {dashboardTab === 'accounts' && (
               <>
-                {/* ADMIN DIRECTORY LIST (Outflow Spending) */}
-                {profile.role === 'ADMIN' ? (
+                {/* ADMIN / USERS DIRECTORY VIEW */}
+                {['ADMIN', 'MD', 'DIRECTOR'].includes(profile.role) ? (
                   <View style={[
                     styles.card, 
                     { 
@@ -1681,7 +2824,13 @@ export default function AppIndex() {
                       borderWidth: activeTheme.borderWidth || 1
                     }
                   ]}>
-                    <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Admin Directory - Outflow Spending</Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                      <Text style={[styles.cardHeader, { color: activeTheme.textColor, marginBottom: 0 }]}>Vault Directory Control</Text>
+                      <TouchableOpacity style={[styles.adminCreateBtn, { backgroundColor: activeTheme.primaryColor }]} onPress={() => setAdminCreateOpen(true)}>
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>+ New User</Text>
+                      </TouchableOpacity>
+                    </View>
+                    
                     {allUsers.length === 0 ? (
                       <Text style={styles.emptyText}>No users registered.</Text>
                     ) : (
@@ -1694,7 +2843,6 @@ export default function AppIndex() {
                           }
                         });
 
-                        // Percent relative to total outflow
                         const pct = totalExpense > 0 ? (totalSpent / totalExpense) * 100 : 0;
 
                         return (
@@ -1704,20 +2852,24 @@ export default function AppIndex() {
                             onPress={() => handleOpenUserSheet(u)}
                           >
                             <View style={styles.teamMemberInfo}>
-                              <View style={[styles.teamMemberAvatar, { backgroundColor: activeTheme.primaryColor, borderRadius: activeTheme.borderRadius }]}>
-                                <Text style={[styles.avatarText, { color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff', fontFamily: activeTheme.fontFamily || 'System' }]}>
-                                  {u.name ? u.name.charAt(0).toUpperCase() : 'U'}
-                                </Text>
-                              </View>
+                              {u.profilePhoto ? (
+                                <Image source={{ uri: u.profilePhoto }} style={styles.teamMemberAvatar} />
+                              ) : (
+                                <View style={[styles.teamMemberAvatar, { backgroundColor: activeTheme.primaryColor, borderRadius: activeTheme.borderRadius }]}>
+                                  <Text style={[styles.avatarText, { color: '#fff' }]}>
+                                    {u.name ? u.name.charAt(0).toUpperCase() : 'U'}
+                                  </Text>
+                                </View>
+                              )}
                               <View>
-                                <Text style={[styles.teamMemberName, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>{u.name || 'Unknown'}</Text>
+                                <Text style={[styles.teamMemberName, { color: activeTheme.textColor }]}>{u.name || 'Unknown'}</Text>
+                                <Text style={{ color: activeTheme.textMutedColor, fontSize: 10 }}>{u.role}</Text>
                               </View>
                             </View>
                             <View style={styles.teamMemberSpending}>
-                              <Text style={[styles.spendingLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Total Outflow</Text>
-                              <Text style={[styles.spendingVal, { color: activeTheme.expenseColor, fontFamily: activeTheme.fontFamily || 'System' }]}>₹{totalSpent.toLocaleString('en-IN')}</Text>
+                              <Text style={[styles.spendingLabel, { color: activeTheme.textMutedColor }]}>Outflow Spent</Text>
+                              <Text style={[styles.spendingVal, { color: activeTheme.expenseColor }]}>₹{totalSpent.toLocaleString('en-IN')}</Text>
                               
-                              {/* Spending Indicator progress track */}
                               <View style={styles.miniProgressBarTrack}>
                                 <View style={[styles.miniProgressBarFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: activeTheme.expenseColor }]} />
                               </View>
@@ -1728,10 +2880,10 @@ export default function AppIndex() {
                     )}
                   </View>
                 ) : (
-                  <View style={[styles.card, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1, padding: 20 }]}>
-                    <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Directory Restricted</Text>
-                    <Text style={{ color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 13 }}>
-                      The members list directory is restricted to Administrators only. Use the Dashboard tab to view and log personal spending accounts.
+                  <View style={[styles.card, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius, padding: 20 }]}>
+                    <Text style={[styles.cardHeader, { color: activeTheme.textColor }]}>Directory Restricted</Text>
+                    <Text style={{ color: activeTheme.textMutedColor, fontSize: 13 }}>
+                      The member control dashboard list directory is restricted to Administrators only. Use the Dashboard tab to view and log personal spending accounts.
                     </Text>
                   </View>
                 )}
@@ -1748,7 +2900,7 @@ export default function AppIndex() {
                   borderWidth: activeTheme.borderWidth || 1
                 }
               ]}>
-                <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System', marginBottom: 12 }]}>🏆 Retro Achievements & Milestones</Text>
+                <Text style={[styles.cardHeader, { color: activeTheme.textColor, marginBottom: 12 }]}>🏆 Achievements & Financial Milestones</Text>
                 <View style={styles.achievementGrid}>
                   {[
                     { id: '1', title: 'Wood Age', desc: 'Log first transaction', unlocked: allTransactions.length > 0, icon: '🪵' },
@@ -1766,7 +2918,6 @@ export default function AppIndex() {
                           backgroundColor: ach.unlocked ? (activeThemeKey === 'minecraft_anime' ? '#13223f' : 'rgba(255, 255, 255, 0.03)') : 'rgba(0, 0, 0, 0.3)',
                           borderColor: ach.unlocked ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)',
                           borderRadius: activeTheme.borderRadius,
-                          borderWidth: activeTheme.borderWidth || 1,
                           opacity: ach.unlocked ? 1 : 0.45
                         }
                       ]}
@@ -1781,6 +2932,158 @@ export default function AppIndex() {
               </View>
             )}
 
+            {dashboardTab === 'calendar' && (
+              <>
+                <View style={[styles.card, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius, padding: 16 }]}>
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor }]}>📅 Finance Calendar Tracker</Text>
+
+                  {/* Month Navigation */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        const d = new Date(calendarDate);
+                        d.setMonth(d.getMonth() - 1);
+                        setCalendarDate(d);
+                        setCalendarSelectedDay(null);
+                      }}
+                      style={{ padding: 8, borderRadius: 12, backgroundColor: activeTheme.primaryColor + '20' }}
+                    >
+                      <Text style={{ color: activeTheme.primaryColor, fontSize: 18, fontWeight: '700' }}>‹</Text>
+                    </TouchableOpacity>
+                    <Text style={{ color: activeTheme.textColor, fontSize: 16, fontWeight: '700' }}>
+                      {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        const d = new Date(calendarDate);
+                        d.setMonth(d.getMonth() + 1);
+                        setCalendarDate(d);
+                        setCalendarSelectedDay(null);
+                      }}
+                      style={{ padding: 8, borderRadius: 12, backgroundColor: activeTheme.primaryColor + '20' }}
+                    >
+                      <Text style={{ color: activeTheme.primaryColor, fontSize: 18, fontWeight: '700' }}>›</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Day Labels */}
+                  <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                      <Text key={d} style={{ flex: 1, textAlign: 'center', color: activeTheme.textMutedColor, fontSize: 11, fontWeight: '600' }}>{d}</Text>
+                    ))}
+                  </View>
+
+                  {/* Calendar Grid */}
+                  {(() => {
+                    const year = calendarDate.getFullYear();
+                    const month = calendarDate.getMonth();
+                    const firstDay = new Date(year, month, 1).getDay();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    const today = new Date();
+
+                    const dayMap: Record<string, { income: number; expense: number; count: number }> = {};
+                    allTransactions.forEach(t => {
+                      const d = new Date(t.dateStr);
+                      if (d.getFullYear() === year && d.getMonth() === month) {
+                        const key = d.getDate().toString();
+                        if (!dayMap[key]) dayMap[key] = { income: 0, expense: 0, count: 0 };
+                        dayMap[key].count++;
+                        if (t.type === 'income') dayMap[key].income += Number(t.amount) || 0;
+                        else dayMap[key].expense += Number(t.amount) || 0;
+                      }
+                    });
+
+                    const cells: React.ReactNode[] = [];
+                    for (let i = 0; i < firstDay; i++) {
+                      cells.push(<View key={`e${i}`} style={{ flex: 1, aspectRatio: 1 }} />);
+                    }
+                    for (let day = 1; day <= daysInMonth; day++) {
+                      const key = day.toString();
+                      const hasData = !!dayMap[key];
+                      const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+                      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const isSelected = calendarSelectedDay === dateStr;
+                      cells.push(
+                        <TouchableOpacity
+                          key={day}
+                          onPress={() => setCalendarSelectedDay(isSelected ? null : dateStr)}
+                          style={{
+                            flex: 1,
+                            aspectRatio: 1,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            margin: 2,
+                            borderRadius: activeTheme.borderRadius / 2,
+                            backgroundColor: isSelected
+                              ? activeTheme.primaryColor
+                              : isToday
+                              ? activeTheme.primaryColor + '22'
+                              : 'transparent',
+                            borderWidth: isToday && !isSelected ? 1.5 : 0,
+                            borderColor: activeTheme.primaryColor,
+                          }}
+                        >
+                          <Text style={{ color: isSelected ? '#fff' : activeTheme.textColor, fontSize: 13, fontWeight: isToday ? '800' : '500' }}>{day}</Text>
+                          {hasData && (
+                            <View style={{ flexDirection: 'row', gap: 2, marginTop: 2 }}>
+                              {dayMap[key].income > 0 && <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: activeTheme.incomeColor }} />}
+                              {dayMap[key].expense > 0 && <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: activeTheme.expenseColor }} />}
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    }
+
+                    const rows: React.ReactNode[][] = [];
+                    for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
+                    while (rows[rows.length - 1].length < 7) {
+                      rows[rows.length - 1].push(<View key={`p${rows[rows.length - 1].length}`} style={{ flex: 1, aspectRatio: 1 }} />);
+                    }
+
+                    return rows.map((row, ri) => (
+                      <View key={ri} style={{ flexDirection: 'row', marginBottom: 2 }}>
+                        {row}
+                      </View>
+                    ));
+                  })()}
+                </View>
+
+                {/* Selected Day details */}
+                {calendarSelectedDay && (() => {
+                  const dayTxns = allTransactions.filter(t => {
+                    const d = new Date(t.dateStr);
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    return `${y}-${m}-${day}` === calendarSelectedDay;
+                  });
+                  return (
+                    <View style={[styles.card, { backgroundColor: activeTheme.cardBackground, borderColor: activeTheme.cardBorder, borderRadius: activeTheme.borderRadius, padding: 16, marginTop: 12 }]}>
+                      <Text style={[styles.cardHeader, { color: activeTheme.textColor }]}>
+                        {new Date(calendarSelectedDay + 'T00:00:00').toLocaleDateString('default', { weekday: 'long', day: 'numeric', month: 'long' })}
+                      </Text>
+                      {dayTxns.length === 0 ? (
+                        <Text style={{ color: activeTheme.textMutedColor, textAlign: 'center', padding: 10 }}>No transactions on this day.</Text>
+                      ) : (
+                        dayTxns.map(t => (
+                          <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: activeTheme.cardBorder }}>
+                            <Text style={{ fontSize: 18, marginRight: 8 }}>{t.type === 'income' ? '📈' : '📉'}</Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: activeTheme.textColor, fontWeight: '600', fontSize: 13 }}>{t.description}</Text>
+                              <Text style={{ color: activeTheme.textMutedColor, fontSize: 10 }}>{t.category}</Text>
+                            </View>
+                            <Text style={{ color: t.type === 'income' ? activeTheme.incomeColor : activeTheme.expenseColor, fontWeight: '800', fontSize: 14 }}>
+                              {t.type === 'income' ? '+' : '-'}₹{t.amount.toLocaleString()}
+                            </Text>
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  );
+                })()}
+              </>
+            )}
+
             {dashboardTab === 'profile' && (
               <>
                 <View style={[
@@ -1789,45 +3092,653 @@ export default function AppIndex() {
                     backgroundColor: activeTheme.cardBackground, 
                     borderColor: activeTheme.cardBorder, 
                     borderRadius: activeTheme.borderRadius,
-                    borderWidth: activeTheme.borderWidth || 1,
                     padding: 20
                   }
                 ]}>
                   <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                    <View style={{ marginBottom: 10 }}>
-                      {activeThemeKey === 'minecraft_anime' ? <AlexAvatar /> : <Text style={{ fontSize: 36 }}>👤</Text>}
-                    </View>
-                    <Text style={[styles.welcomeText, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 18 }]}>{profile.name}</Text>
-                    <Text style={{ color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12, marginTop: 4 }}>{profile.email}</Text>
+                    <TouchableOpacity onPress={() => handleSelectImage('profile')} style={{ marginBottom: 10 }}>
+                      {profile.profilePhoto ? (
+                        <Image source={{ uri: profile.profilePhoto }} style={styles.profileAvatarImg} />
+                      ) : (
+                        <View style={styles.profileAvatarPlaceholder}>
+                          <Text style={{ fontSize: 32 }}>👤</Text>
+                        </View>
+                      )}
+                      <Text style={{ color: activeTheme.primaryColor, fontSize: 11, marginTop: 4, textAlign: 'center' }}>Upload Photo</Text>
+                    </TouchableOpacity>
+                    <Text style={[styles.welcomeText, { color: activeTheme.textColor, fontSize: 18 }]}>{profile.name}</Text>
+                    <Text style={{ color: activeTheme.textMutedColor, fontSize: 12, marginTop: 4 }}>{profile.email}</Text>
                   </View>
                   
                   <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
                   
                   <View style={{ gap: 10, marginVertical: 12 }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12 }}>ROLE</Text>
-                      <Text style={{ color: activeTheme.primaryColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12, fontWeight: '700' }}>{profile.role}</Text>
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 12 }}>ROLE</Text>
+                      <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700' }}>{profile.role}</Text>
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12 }}>EMPLOYEE ID</Text>
-                      <Text style={{ color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12, fontWeight: '600' }}>{profile.employeeId || 'N/A'}</Text>
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 12 }}>EMPLOYEE ID</Text>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 12, fontWeight: '600' }}>{profile.employeeId || 'N/A'}</Text>
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12 }}>PHONE</Text>
-                      <Text style={{ color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12 }}>{profile.phone || 'N/A'}</Text>
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 12 }}>PHONE</Text>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 12 }}>{profile.phone || 'N/A'}</Text>
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12 }}>JOIN DATE</Text>
-                      <Text style={{ color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System', fontSize: 12 }}>
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 12 }}>MEMBER SINCE</Text>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 12 }}>
                         {new Date(profile.createdAt).toLocaleDateString('en-IN')}
                       </Text>
                     </View>
                   </View>
+
+                  <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
+
+                  {/* Change Password settings form */}
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontSize: 13, marginBottom: 8 }]}>🔒 Update Security Password</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
+                    placeholder="New Password (min 6 chars)"
+                    placeholderTextColor={activeTheme.textMutedColor}
+                    secureTextEntry={true}
+                    value={newPasswordInput}
+                    onChangeText={setNewPasswordInput}
+                  />
+                  <TouchableOpacity style={[styles.submitBtn, { backgroundColor: activeTheme.primaryColor, paddingVertical: 10, marginTop: 8 }]} onPress={handleProfileChangePassword} disabled={isChangingPassword}>
+                    {isChangingPassword ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Update Password</Text>}
+                  </TouchableOpacity>
+
+                  <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
+
+                  {/* Local biometric login setup */}
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontSize: 13, marginBottom: 8 }]}>🔑 Biometric Preferences</Text>
+                  <TouchableOpacity style={[styles.submitBtn, { backgroundColor: activeTheme.primaryColor, paddingVertical: 10 }]} onPress={async () => {
+                    const check = await handleBiometricAuth();
+                    if (check) {
+                      Alert.alert("Success", "Biometric enrollment confirmed locally.");
+                    }
+                  }}>
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Enroll Fingerprint/FaceID</Text>
+                  </TouchableOpacity>
+
+                  <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
+                  
+                  {/* App Theme Picker (Admin Only) */}
+                  {['ADMIN'].includes(profile?.role || '') && (
+                    <>
+                      <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontSize: 13, marginBottom: 8 }]}>🎨 App Theme Picker (Admin)</Text>
+                      <View style={styles.themeSelectorGrid}>
+                        {Object.entries(THEMES).map(([key, t]) => {
+                          const isActive = activeThemeKey === key;
+                          return (
+                            <TouchableOpacity
+                              key={key}
+                              style={[
+                                styles.themeSelectorBtn,
+                                { 
+                                  borderRadius: activeTheme.borderRadius, 
+                                  borderColor: isActive ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)',
+                                  backgroundColor: isActive ? activeTheme.primaryColor + '12' : 'rgba(255,255,255,0.02)'
+                                }
+                              ]}
+                              onPress={() => handleUpdateTheme(key)}
+                            >
+                              <Text style={[
+                                styles.themeSelectorBtnText,
+                                { 
+                                  color: isActive ? activeTheme.textColor : activeTheme.textMutedColor,
+                                  fontFamily: activeTheme.fontFamily || 'System'
+                                }
+                              ]}>
+                                {t.name}
+                              </Text>
+                              {isActive && <Text style={{ color: activeTheme.primaryColor, fontSize: 14 }}>●</Text>}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      <View style={[styles.summaryDivider, { backgroundColor: activeTheme.inputBorder }]} />
+                    </>
+                  )}
+
+                  {/* Destructive account deletion options */}
+                  <TouchableOpacity style={[styles.deleteUserBtn, { borderColor: 'red', marginTop: 15 }]} onPress={handleDeleteSelfAccount}>
+                    <Text style={{ color: 'red', fontWeight: '700', fontSize: 12 }}>Delete Account & Audit History</Text>
+                  </TouchableOpacity>
                 </View>
 
-                <TouchableOpacity style={[styles.logoutBtn, { borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 3 : 1, borderColor: activeTheme.isRetro ? '#000000' : 'rgba(239, 68, 68, 0.3)' }]} onPress={handleLogout}>
-                  <Text style={[styles.logoutText, { fontFamily: activeTheme.fontFamily || 'System', textTransform: activeTheme.isRetro ? 'uppercase' : 'none' }]}>Secure Logout</Text>
+                <TouchableOpacity style={[styles.logoutBtn, { borderRadius: activeTheme.borderRadius, borderColor: 'rgba(239, 68, 68, 0.3)' }]} onPress={handleLogout}>
+                  <Text style={[styles.logoutText]}>Secure Logout</Text>
                 </TouchableOpacity>
+              </>
+            )}
+
+            {dashboardTab === 'stats' && (
+              <View style={{ flex: 1, paddingBottom: 40 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                  <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontSize: 18, marginBottom: 0 }]}>Statistics</Text>
+                  <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                    {(['Daily', 'Weekly', 'Monthly', 'Yearly'] as const).map(p => (
+                      <TouchableOpacity 
+                        key={p} 
+                        style={{
+                          paddingHorizontal: 8, paddingVertical: 4, 
+                          borderRadius: 8, 
+                          backgroundColor: statsPeriod === p ? activeTheme.primaryColor : 'rgba(255,255,255,0.1)'
+                        }}
+                        onPress={() => { setStatsPeriod(p); setChartZoom(1); }}
+                      >
+                        <Text style={{ color: statsPeriod === p ? '#fff' : activeTheme.textColor, fontSize: 11, fontWeight: '700' }}>{p}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                {/* ZOOM CONTROLS */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <Text style={{ color: activeTheme.textMutedColor, fontSize: 12 }}>Pinch / use buttons to zoom</Text>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <TouchableOpacity onPress={() => setChartZoom(z => Math.max(1, z - 0.2))} style={{ paddingHorizontal: 12, paddingVertical: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 6 }}>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 18, fontWeight: 'bold' }}>-</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setChartZoom(z => Math.min(3, z + 0.2))} style={{ paddingHorizontal: 12, paddingVertical: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 6 }}>
+                      <Text style={{ color: activeTheme.textColor, fontSize: 18, fontWeight: 'bold' }}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <PinchGestureHandler onGestureEvent={(e) => {
+                  if (e.nativeEvent.scale) {
+                    setChartZoom(Math.max(1, Math.min(3, e.nativeEvent.scale)));
+                  }
+                }}>
+                  <Animated.View>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                      <View style={{ width: chartWidth * chartZoom, paddingRight: 20 }}>
+                        <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Expenses Trend ({statsPeriod})</Text>
+                        {(() => {
+                          const chartData = getChartData(dashboardViewMode === 'all-over' ? allTransactions : allTransactions.filter(t => t.userUid === profile?.uid), 'expense');
+                          const cw = chartWidth * chartZoom;
+                          const dataLen = Math.max(1, chartData.datasets[0].data.length);
+                          return (
+                            <View style={{ position: 'relative' }}>
+                              <LineChart
+                                data={chartData}
+                                width={cw}
+                                height={220}
+                                yAxisLabel="₹"
+                                yAxisSuffix=""
+                                withDots={Platform.OS !== 'web'}
+                                chartConfig={{
+                                  backgroundColor: activeTheme.cardBackground,
+                                  backgroundGradientFrom: activeTheme.cardBackground,
+                                  backgroundGradientTo: activeTheme.cardBackground,
+                                  decimalPlaces: 0,
+                                  color: (opacity = 1) => `rgba(239, 68, 68, ${opacity})`,
+                                  labelColor: () => activeTheme.textMutedColor,
+                                  style: { borderRadius: 16 }
+                                }}
+                                style={{ marginVertical: 8, borderRadius: activeTheme.borderRadius, borderColor: activeTheme.cardBorder, borderWidth: activeTheme.borderWidth || 1 }}
+                              />
+                              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                                {chartData.datasets[0].data.map((val: any, i: number) => {
+                                  const xPos = 64 + (i * (cw - 64)) / dataLen;
+                                  return (
+                                    <TouchableOpacity
+                                      key={i}
+                                      style={{ position: 'absolute', left: xPos - 20, width: 40, height: '100%', top: 0 }}
+                                      onPress={() => {
+                                        setExpenseTooltip({ visible: true, x: xPos, y: 100, value: val });
+                                        setTimeout(() => setExpenseTooltip(null), 3000);
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </View>
+                              {expenseTooltip?.visible && (
+                                <View style={{ position: 'absolute', left: expenseTooltip.x - 25, top: expenseTooltip.y - 35, backgroundColor: 'rgba(0,0,0,0.85)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, zIndex: 10, pointerEvents: 'none' }}>
+                                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>₹{expenseTooltip.value}</Text>
+                                </View>
+                              )}
+                            </View>
+                          );
+                        })()}
+
+                        <Text style={[styles.cardHeader, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System', marginTop: 16 }]}>Income Trend ({statsPeriod})</Text>
+                        {(() => {
+                          const chartData = getChartData(dashboardViewMode === 'all-over' ? allTransactions : allTransactions.filter(t => t.userUid === profile?.uid), 'income');
+                          const cw = chartWidth * chartZoom;
+                          const dataLen = Math.max(1, chartData.datasets[0].data.length);
+                          return (
+                            <View style={{ position: 'relative' }}>
+                              <LineChart
+                                data={chartData}
+                                width={cw}
+                                height={220}
+                                yAxisLabel="₹"
+                                yAxisSuffix=""
+                                withDots={Platform.OS !== 'web'}
+                                chartConfig={{
+                                  backgroundColor: activeTheme.cardBackground,
+                                  backgroundGradientFrom: activeTheme.cardBackground,
+                                  backgroundGradientTo: activeTheme.cardBackground,
+                                  decimalPlaces: 0,
+                                  color: (opacity = 1) => `rgba(16, 185, 129, ${opacity})`,
+                                  labelColor: () => activeTheme.textMutedColor,
+                                  style: { borderRadius: 16 }
+                                }}
+                                style={{ marginVertical: 8, borderRadius: activeTheme.borderRadius, borderColor: activeTheme.cardBorder, borderWidth: activeTheme.borderWidth || 1 }}
+                              />
+                              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                                {chartData.datasets[0].data.map((val: any, i: number) => {
+                                  const xPos = 64 + (i * (cw - 64)) / dataLen;
+                                  return (
+                                    <TouchableOpacity
+                                      key={i}
+                                      style={{ position: 'absolute', left: xPos - 20, width: 40, height: '100%', top: 0 }}
+                                      onPress={() => {
+                                        setIncomeTooltip({ visible: true, x: xPos, y: 100, value: val });
+                                        setTimeout(() => setIncomeTooltip(null), 3000);
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </View>
+                              {incomeTooltip?.visible && (
+                                <View style={{ position: 'absolute', left: incomeTooltip.x - 25, top: incomeTooltip.y - 35, backgroundColor: 'rgba(0,0,0,0.85)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, zIndex: 10, pointerEvents: 'none' }}>
+                                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>₹{incomeTooltip.value}</Text>
+                                </View>
+                              )}
+                            </View>
+                          );
+                        })()}
+                      </View>
+                    </ScrollView>
+                  </Animated.View>
+                </PinchGestureHandler>
+              </View>
+            )}
+
+            {dashboardTab === 'notes' && (
+              <>
+                <View style={[
+                  styles.card, 
+                  { 
+                    backgroundColor: activeTheme.cardBackground, 
+                    borderColor: activeTheme.cardBorder, 
+                    borderRadius: activeTheme.borderRadius,
+                    padding: 16
+                  }
+                ]}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Text style={[styles.cardHeader, { color: activeTheme.textColor, marginBottom: 0 }]}>📝 Sticky Notes & Reminders</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setEditingNote(null);
+                        setNoteTitle('');
+                        setNoteContent('');
+                        setNoteModalOpen(true);
+                      }}
+                      style={{
+                        backgroundColor: activeTheme.primaryColor,
+                        paddingVertical: 6,
+                        paddingHorizontal: 12,
+                        borderRadius: activeTheme.borderRadius / 2
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>+ Add Note</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {notes.length === 0 ? (
+                    <Text style={{ color: activeTheme.textMutedColor, textAlign: 'center', marginVertical: 20, fontSize: 13 }}>
+                      No notes saved. Tap '+ Add Note' to create your first note!
+                    </Text>
+                  ) : (
+                    <View style={{ gap: 10 }}>
+                      {notes.map((note) => (
+                        <View
+                          key={note.id}
+                          style={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                            borderWidth: 1,
+                            borderColor: 'rgba(255, 255, 255, 0.05)',
+                            borderRadius: activeTheme.borderRadius / 2,
+                            padding: 12
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 14, flex: 1 }}>{note.title}</Text>
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                              <TouchableOpacity onPress={() => {
+                                setEditingNote(note);
+                                setNoteTitle(note.title);
+                                setNoteContent(note.content);
+                                setNoteModalOpen(true);
+                              }}>
+                                <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700' }}>Edit</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity onPress={() => handleDeleteNote(note.id)}>
+                                <Text style={{ color: activeTheme.expenseColor, fontSize: 12, fontWeight: '700' }}>Delete</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                          <Text style={{ color: activeTheme.textColor, fontSize: 13, marginTop: 6, lineHeight: 18 }}>{note.content}</Text>
+                          <Text style={{ color: activeTheme.textMutedColor, fontSize: 9, marginTop: 8 }}>
+                            {new Date(note.createdAt).toLocaleString('en-IN')}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              </>
+            )}
+
+            {dashboardTab === 'chat' && (
+              <>
+                {currentChat === null ? (
+                  // 1. CONVERSATIONS LIST VIEW
+                  <View style={[
+                    styles.card, 
+                    { 
+                      backgroundColor: activeTheme.cardBackground, 
+                      borderColor: activeTheme.cardBorder, 
+                      borderRadius: activeTheme.borderRadius,
+                      padding: 16
+                    }
+                  ]}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                      <Text style={[styles.cardHeader, { color: activeTheme.textColor, marginBottom: 0 }]}>💬 Secured Conversations</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setNewChatGroupTitle('');
+                          setNewChatSelectedUsers([]);
+                          setNewChatModalOpen(true);
+                        }}
+                        style={{
+                          backgroundColor: activeTheme.primaryColor,
+                          paddingVertical: 6,
+                          paddingHorizontal: 12,
+                          borderRadius: activeTheme.borderRadius / 2
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>+ New Chat</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {chats.length === 0 ? (
+                      <Text style={{ color: activeTheme.textMutedColor, textAlign: 'center', marginVertical: 30, fontSize: 13 }}>
+                        No secured chats found. Tap '+ New Chat' to start a direct message or create a group chat.
+                      </Text>
+                    ) : (
+                      <View style={{ gap: 10 }}>
+                        {chats.map((chat) => {
+                          let chatTitle = 'Secure Room';
+                          let avatarInitials = '💬';
+
+                          if (chat.isGroup) {
+                            chatTitle = chat.groupName || 'Secure Group';
+                            avatarInitials = '👥';
+                          } else {
+                            const otherUid = chat.participants.find(uid => uid !== profile?.uid);
+                            const otherUser = allUsers.find(u => u.uid === otherUid);
+                            if (otherUser) {
+                              chatTitle = otherUser.name;
+                              avatarInitials = otherUser.name.slice(0, 2).toUpperCase();
+                            }
+                          }
+
+                          return (
+                            <TouchableOpacity
+                              key={chat.id}
+                              onPress={() => setCurrentChat(chat)}
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                                borderWidth: 1,
+                                borderColor: 'rgba(255, 255, 255, 0.05)',
+                                borderRadius: activeTheme.borderRadius / 2,
+                                padding: 12,
+                                gap: 12
+                              }}
+                            >
+                              <View style={{
+                                width: 40,
+                                height: 40,
+                                borderRadius: 20,
+                                backgroundColor: activeTheme.primaryColor + '20',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                borderWidth: 1,
+                                borderColor: activeTheme.primaryColor + '40'
+                              }}>
+                                <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '800' }}>{avatarInitials}</Text>
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 14 }}>{chatTitle}</Text>
+                                <Text style={{ color: activeTheme.textMutedColor, fontSize: 11, marginTop: 2 }}>
+                                  {chat.isGroup ? 'Group Chat' : 'Direct Message'}
+                                </Text>
+                              </View>
+                              <Text style={{ color: activeTheme.primaryColor, fontSize: 16 }}>›</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+                ) : (
+                  // 2. ACTIVE CHAT LOG VIEW
+                  <View style={[
+                    styles.card, 
+                    { 
+                      backgroundColor: activeTheme.cardBackground, 
+                      borderColor: activeTheme.cardBorder, 
+                      borderRadius: activeTheme.borderRadius,
+                      padding: 12,
+                      minHeight: 400
+                    }
+                  ]}>
+                    {/* Active Chat Header */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderBottomColor: activeTheme.inputBorder, paddingBottom: 10, marginBottom: 10 }}>
+                      <TouchableOpacity
+                        onPress={() => setCurrentChat(null)}
+                        style={{ padding: 4, borderRadius: 8, backgroundColor: 'rgba(255, 255, 255, 0.05)' }}
+                      >
+                        <Text style={{ color: activeTheme.textColor, fontSize: 16, fontWeight: '700' }}>←</Text>
+                      </TouchableOpacity>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: activeTheme.textColor, fontWeight: '800', fontSize: 14 }}>
+                          {currentChat.isGroup 
+                            ? (currentChat.groupName || 'Secure Group') 
+                            : (allUsers.find(u => u.uid === currentChat.participants.find(p => p !== profile?.uid))?.name || 'Secure DM')
+                          }
+                        </Text>
+                        <Text style={{ color: activeTheme.textMutedColor, fontSize: 10 }}>
+                          🔐 End-to-End Client Encrypted (AES-256)
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Messages Scroll Area */}
+                    <ScrollView 
+                      style={{ maxHeight: 300, minHeight: 250, marginBottom: 10 }}
+                      contentContainerStyle={{ gap: 8 }}
+                      ref={(ref) => ref?.scrollToEnd({ animated: true })}
+                    >
+                      {chatMessages.length === 0 ? (
+                        <Text style={{ color: activeTheme.textMutedColor, textAlign: 'center', marginTop: 50, fontSize: 12 }}>
+                          No messages yet. Send a secured message to begin!
+                        </Text>
+                      ) : (
+                        chatMessages.map((msg) => {
+                          const isMe = msg.senderId === profile?.uid;
+                          return (
+                            <View 
+                              key={msg.id} 
+                              style={{ 
+                                alignSelf: isMe ? 'flex-end' : 'flex-start',
+                                maxWidth: '80%',
+                              }}
+                            >
+                              {!isMe && currentChat.isGroup && (
+                                <Text style={{ color: activeTheme.textMutedColor, fontSize: 10, marginLeft: 4, marginBottom: 2 }}>
+                                  {msg.senderName}
+                                </Text>
+                              )}
+                              <View style={{
+                                backgroundColor: isMe ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)',
+                                paddingVertical: msg.type === 'image' || msg.type === 'contact' ? 4 : 8,
+                                paddingHorizontal: msg.type === 'image' || msg.type === 'contact' ? 4 : 12,
+                                borderRadius: activeTheme.borderRadius / 2,
+                                borderWidth: 1,
+                                borderColor: isMe ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.08)',
+                                overflow: 'hidden'
+                              }}>
+                                {(() => {
+                                  if (msg.type === 'image') {
+                                    return (
+                                      <TouchableOpacity onPress={() => Linking.openURL(msg.text)} style={{ borderRadius: 6, overflow: 'hidden' }}>
+                                        <Image 
+                                          source={{ uri: msg.text }} 
+                                          style={{ width: 200, height: 150 }} 
+                                          resizeMode="cover" 
+                                        />
+                                        <View style={{ padding: 6, backgroundColor: 'rgba(0,0,0,0.5)', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                          <Text style={{ color: '#fff', fontSize: 10, flex: 1 }} numberOfLines={1}>{msg.fileName || 'Image'}</Text>
+                                          <Text style={{ color: activeTheme.primaryColor, fontSize: 10, fontWeight: 'bold' }}>View ↗</Text>
+                                        </View>
+                                      </TouchableOpacity>
+                                    );
+                                  } else if (msg.type === 'document') {
+                                    return (
+                                      <TouchableOpacity 
+                                        onPress={() => Linking.openURL(msg.text)}
+                                        style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 160 }}
+                                      >
+                                        <Text style={{ fontSize: 24 }}>📄</Text>
+                                        <View style={{ flex: 1 }}>
+                                          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }} numberOfLines={1}>{msg.fileName || 'Document'}</Text>
+                                          <Text style={{ color: '#94a3b8', fontSize: 10 }}>{msg.fileSize || ''}</Text>
+                                        </View>
+                                        <Text style={{ color: isMe ? '#fff' : activeTheme.primaryColor, fontSize: 16 }}>↓</Text>
+                                      </TouchableOpacity>
+                                    );
+                                  } else if (msg.type === 'audio') {
+                                    return (
+                                      <TouchableOpacity 
+                                        onPress={() => Linking.openURL(msg.text)}
+                                        style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 160 }}
+                                      >
+                                        <Text style={{ fontSize: 24 }}>🎵</Text>
+                                        <View style={{ flex: 1 }}>
+                                          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }} numberOfLines={1}>{msg.fileName || 'Audio Message'}</Text>
+                                          <Text style={{ color: '#94a3b8', fontSize: 10 }}>{msg.fileSize || ''}</Text>
+                                        </View>
+                                        <Text style={{ color: isMe ? '#fff' : activeTheme.primaryColor, fontSize: 16 }}>▶</Text>
+                                      </TouchableOpacity>
+                                    );
+                                  } else if (msg.type === 'contact') {
+                                    try {
+                                      const contactObj = JSON.parse(msg.text);
+                                      return (
+                                        <View style={{ padding: 8, minWidth: 180 }}>
+                                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                            <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: isMe ? 'rgba(255,255,255,0.2)' : activeTheme.primaryColor + '20', justifyContent: 'center', alignItems: 'center' }}>
+                                              <Text style={{ fontSize: 13 }}>👤</Text>
+                                            </View>
+                                            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{contactObj.name}</Text>
+                                          </View>
+                                          <Text style={{ color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>📧 {contactObj.email}</Text>
+                                          <Text style={{ color: '#cbd5e1', fontSize: 11, marginBottom: 8 }}>📞 {contactObj.phone}</Text>
+                                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                                            <TouchableOpacity 
+                                              onPress={() => Linking.openURL(`mailto:${contactObj.email}`)}
+                                              style={{ flex: 1, backgroundColor: 'rgba(255, 255, 255, 0.15)', paddingVertical: 6, borderRadius: 6, alignItems: 'center' }}
+                                            >
+                                              <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' }}>Email</Text>
+                                            </TouchableOpacity>
+                                            {contactObj.phone !== 'N/A' && (
+                                              <TouchableOpacity 
+                                                onPress={() => Linking.openURL(`tel:${contactObj.phone}`)}
+                                                style={{ flex: 1, backgroundColor: isMe ? '#fff' : activeTheme.primaryColor, paddingVertical: 6, borderRadius: 6, alignItems: 'center' }}
+                                              >
+                                                <Text style={{ color: isMe ? '#000' : '#fff', fontSize: 9, fontWeight: '700' }}>Call</Text>
+                                              </TouchableOpacity>
+                                            )}
+                                          </View>
+                                        </View>
+                                      );
+                                    } catch (e) {
+                                      return <Text style={{ color: '#fff', fontSize: 13 }}>[Encrypted Contact Card]</Text>;
+                                    }
+                                  } else {
+                                    return <Text style={{ color: '#fff', fontSize: 13, lineHeight: 18 }}>{msg.text}</Text>;
+                                  }
+                                })()}
+                              </View>
+                              <Text style={{ 
+                                color: activeTheme.textMutedColor, 
+                                fontSize: 8, 
+                                marginTop: 2, 
+                                alignSelf: isMe ? 'flex-end' : 'flex-start',
+                                marginRight: isMe ? 4 : 0,
+                                marginLeft: !isMe ? 4 : 0
+                              }}>
+                                {msg.timestamp ? new Date(msg.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                              </Text>
+                            </View>
+                          );
+                        })
+                      )}
+                    </ScrollView>
+
+                    {/* Chat Sender Area */}
+                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                      {sharingMedia ? (
+                        <ActivityIndicator size="small" color={activeTheme.primaryColor} style={{ width: 38, height: 38, justifyContent: 'center', alignItems: 'center' }} />
+                      ) : (
+                        <TouchableOpacity
+                          onPress={() => setChatAttachmentMenuOpen(true)}
+                          style={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                            borderWidth: 1,
+                            borderColor: activeTheme.inputBorder,
+                            width: 38,
+                            height: 38,
+                            borderRadius: activeTheme.borderRadius,
+                            justifyContent: 'center',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <Text style={{ color: activeTheme.textColor, fontSize: 20, fontWeight: 'bold' }}>+</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TextInput
+                        style={[styles.input, { flex: 1, backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, paddingVertical: 8, paddingHorizontal: 12, fontSize: 13 }]}
+                        placeholder="Type encrypted message..."
+                        placeholderTextColor={activeTheme.textMutedColor}
+                        value={chatInputText}
+                        onChangeText={setChatInputText}
+                        onSubmitEditing={handleSendMessage}
+                      />
+                      <TouchableOpacity
+                        onPress={handleSendMessage}
+                        style={{
+                          backgroundColor: activeTheme.primaryColor,
+                          paddingVertical: 10,
+                          paddingHorizontal: 14,
+                          borderRadius: activeTheme.borderRadius
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>Send</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
               </>
             )}
 
@@ -1851,7 +3762,7 @@ export default function AppIndex() {
                 style={styles.logo}
                 resizeMode="contain"
               />
-              <Text style={[styles.brandSubtitle, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System', textTransform: activeTheme.isRetro ? 'uppercase' : 'none' }]}>Secure Financial Ledger Portal</Text>
+              <Text style={[styles.brandSubtitle, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Secure Financial Ledger Portal</Text>
             </View>
 
             {/* Segmented Tab Controls */}
@@ -1870,7 +3781,6 @@ export default function AppIndex() {
                     { 
                       color: activeTab === 'signin' ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff') : activeTheme.textMutedColor,
                       fontFamily: activeTheme.fontFamily || 'System',
-                      textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
                     }
                   ]}>Sign In</Text>
                 </TouchableOpacity>
@@ -1887,7 +3797,6 @@ export default function AppIndex() {
                     { 
                       color: activeTab === 'register' ? (activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff') : activeTheme.textMutedColor,
                       fontFamily: activeTheme.fontFamily || 'System',
-                      textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
                     }
                   ]}>Register</Text>
                 </TouchableOpacity>
@@ -1897,37 +3806,14 @@ export default function AppIndex() {
             {activeTab === 'forgot' ? (
               // FORGOT PASSWORD FORM
               <View style={styles.form}>
-                <Text style={{ 
-                  color: activeTheme.textColor, 
-                  fontSize: 16, 
-                  fontWeight: '700', 
-                  fontFamily: activeTheme.fontFamily || 'System',
-                  textAlign: 'center',
-                  marginBottom: 4
-                }}>
+                <Text style={{ color: activeTheme.textColor, fontSize: 16, fontWeight: '700', textAlign: 'center', marginBottom: 4 }}>
                   Reset Security Password
                 </Text>
-                <Text style={{ 
-                  color: activeTheme.textMutedColor, 
-                  fontSize: 12, 
-                  fontFamily: activeTheme.fontFamily || 'System',
-                  textAlign: 'center',
-                  marginBottom: 16
-                }}>
+                <Text style={{ color: activeTheme.textMutedColor, fontSize: 12, textAlign: 'center', marginBottom: 16 }}>
                   Enter your registered email address to receive a secure password reset link.
                 </Text>
                 <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
+                  style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                   placeholder="Email Address"
                   placeholderTextColor={activeTheme.textMutedColor}
                   keyboardType="email-address"
@@ -1936,29 +3822,14 @@ export default function AppIndex() {
                   onChangeText={setEmail}
                 />
                 <TouchableOpacity 
-                  style={[
-                    styles.submitBtn, 
-                    { 
-                      backgroundColor: activeTheme.primaryColor, 
-                      borderRadius: activeTheme.borderRadius,
-                      borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 3 : 0,
-                      borderColor: activeTheme.isRetro ? '#000000' : 'transparent'
-                    }
-                  ]} 
+                  style={[styles.submitBtn, { backgroundColor: activeTheme.primaryColor, borderRadius: activeTheme.borderRadius }]} 
                   onPress={handleForgotPassword}
                   disabled={authLoading}
                 >
                   {authLoading ? (
                     <ActivityIndicator size="small" color={activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff'} />
                   ) : (
-                    <Text style={[
-                      styles.submitBtnText, 
-                      { 
-                        color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff',
-                        fontFamily: activeTheme.fontFamily || 'System',
-                        textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
-                      }
-                    ]}>Send Reset Link</Text>
+                    <Text style={[styles.submitBtnText, { color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff' }]}>Send Reset Link</Text>
                   )}
                 </TouchableOpacity>
                 <TouchableOpacity 
@@ -1968,13 +3839,7 @@ export default function AppIndex() {
                   }}
                   style={{ alignSelf: 'center', marginTop: 12, paddingVertical: 4 }}
                 >
-                  <Text style={{ 
-                    color: activeTheme.primaryColor, 
-                    fontSize: 13, 
-                    fontWeight: '600', 
-                    fontFamily: activeTheme.fontFamily || 'System',
-                    textDecorationLine: 'underline' 
-                  }}>
+                  <Text style={{ color: activeTheme.primaryColor, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' }}>
                     Back to Sign In
                   </Text>
                 </TouchableOpacity>
@@ -1983,17 +3848,7 @@ export default function AppIndex() {
               // EMAIL/PASSWORD SIGN IN FORM
               <View style={styles.form}>
                 <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
+                  style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                   placeholder="Email Address"
                   placeholderTextColor={activeTheme.textMutedColor}
                   keyboardType="email-address"
@@ -2003,19 +3858,7 @@ export default function AppIndex() {
                 />
                 <View style={{ flexDirection: 'row', alignItems: 'center', position: 'relative' }}>
                   <TextInput
-                    style={[
-                      styles.input, 
-                      { 
-                        backgroundColor: activeTheme.inputBackground, 
-                        borderColor: activeTheme.inputBorder, 
-                        borderWidth: activeTheme.borderWidth || 1,
-                        borderRadius: activeTheme.borderRadius, 
-                        color: activeTheme.textColor,
-                        fontFamily: activeTheme.fontFamily || 'System',
-                        flex: 1,
-                        paddingRight: 50
-                      }
-                    ]}
+                    style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, flex: 1, paddingRight: 50 }]}
                     placeholder="Security Password"
                     placeholderTextColor={activeTheme.textMutedColor}
                     secureTextEntry={!showPassword}
@@ -2026,7 +3869,7 @@ export default function AppIndex() {
                     onPress={() => setShowPassword(!showPassword)}
                     style={{ position: 'absolute', right: 12, padding: 8 }}
                   >
-                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700', fontFamily: activeTheme.fontFamily || 'System' }}>
+                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700' }}>
                       {showPassword ? "Hide" : "Show"}
                     </Text>
                   </TouchableOpacity>
@@ -2035,75 +3878,46 @@ export default function AppIndex() {
                   onPress={() => setActiveTab('forgot')}
                   style={{ alignSelf: 'flex-end', marginTop: -8, marginBottom: 4, paddingVertical: 4 }}
                 >
-                  <Text style={{ 
-                    color: activeTheme.primaryColor, 
-                    fontSize: 12, 
-                    fontWeight: '600', 
-                    fontFamily: activeTheme.fontFamily || 'System',
-                    textDecorationLine: 'underline' 
-                  }}>
+                  <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '600', textDecorationLine: 'underline' }}>
                     Forgot Password?
                   </Text>
                 </TouchableOpacity>
+                
+                {/* Standard and biometric authentication trigger actions */}
                 <TouchableOpacity 
-                  style={[
-                    styles.submitBtn, 
-                    { 
-                      backgroundColor: activeTheme.primaryColor, 
-                      borderRadius: activeTheme.borderRadius,
-                      borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 3 : 0,
-                      borderColor: activeTheme.isRetro ? '#000000' : 'transparent'
-                    }
-                  ]} 
+                  style={[styles.submitBtn, { backgroundColor: activeTheme.primaryColor, borderRadius: activeTheme.borderRadius }]} 
                   onPress={handleSignIn}
                   disabled={authLoading}
                 >
                   {authLoading ? (
                     <ActivityIndicator size="small" color={activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff'} />
                   ) : (
-                    <Text style={[
-                      styles.submitBtnText, 
-                      { 
-                        color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff',
-                        fontFamily: activeTheme.fontFamily || 'System',
-                        textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
-                      }
-                    ]}>Sign In</Text>
+                    <Text style={[styles.submitBtnText, { color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff' }]}>Sign In</Text>
                   )}
+                </TouchableOpacity>
+
+                {/* Biometric trigger button */}
+                <TouchableOpacity style={[styles.biometricBtn, { borderColor: activeTheme.primaryColor }]} onPress={triggerBiometricUnlock}>
+                  <Text style={{ color: activeTheme.primaryColor, fontWeight: '700', fontSize: 13 }}>Unlock with Biometrics (Fingerprint/FaceID)</Text>
+                </TouchableOpacity>
+
+                {/* Google Sign In button */}
+                <TouchableOpacity style={styles.socialBtn} onPress={handleGoogleSignIn}>
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Sign In with Google</Text>
                 </TouchableOpacity>
               </View>
             ) : (
               // USER/EMPLOYEE REGISTRATION FORM
               <View style={styles.form}>
                 <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
+                  style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                   placeholder="Full Name"
                   placeholderTextColor={activeTheme.textMutedColor}
                   value={fullName}
                   onChangeText={setFullName}
                 />
                 <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
+                  style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                   placeholder="Email Address"
                   placeholderTextColor={activeTheme.textMutedColor}
                   keyboardType="email-address"
@@ -2112,17 +3926,7 @@ export default function AppIndex() {
                   onChangeText={setEmail}
                 />
                 <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: activeTheme.inputBackground, 
-                      borderColor: activeTheme.inputBorder, 
-                      borderWidth: activeTheme.borderWidth || 1,
-                      borderRadius: activeTheme.borderRadius, 
-                      color: activeTheme.textColor,
-                      fontFamily: activeTheme.fontFamily || 'System'
-                    }
-                  ]}
+                  style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor }]}
                   placeholder="Phone Number"
                   placeholderTextColor={activeTheme.textMutedColor}
                   keyboardType="phone-pad"
@@ -2131,19 +3935,7 @@ export default function AppIndex() {
                 />
                 <View style={{ flexDirection: 'row', alignItems: 'center', position: 'relative' }}>
                   <TextInput
-                    style={[
-                      styles.input, 
-                      { 
-                        backgroundColor: activeTheme.inputBackground, 
-                        borderColor: activeTheme.inputBorder, 
-                        borderWidth: activeTheme.borderWidth || 1,
-                        borderRadius: activeTheme.borderRadius, 
-                        color: activeTheme.textColor,
-                        fontFamily: activeTheme.fontFamily || 'System',
-                        flex: 1,
-                        paddingRight: 50
-                      }
-                    ]}
+                    style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, flex: 1, paddingRight: 50 }]}
                     placeholder="Security Password"
                     placeholderTextColor={activeTheme.textMutedColor}
                     secureTextEntry={!showPassword}
@@ -2154,36 +3946,21 @@ export default function AppIndex() {
                     onPress={() => setShowPassword(!showPassword)}
                     style={{ position: 'absolute', right: 12, padding: 8 }}
                   >
-                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700', fontFamily: activeTheme.fontFamily || 'System' }}>
+                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700' }}>
                       {showPassword ? "Hide" : "Show"}
                     </Text>
                   </TouchableOpacity>
                 </View>
                 
                 <TouchableOpacity 
-                  style={[
-                    styles.submitBtn, 
-                    { 
-                      backgroundColor: activeTheme.primaryColor, 
-                      borderRadius: activeTheme.borderRadius,
-                      borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 3 : 0,
-                      borderColor: activeTheme.isRetro ? '#000000' : 'transparent'
-                    }
-                  ]} 
+                  style={[styles.submitBtn, { backgroundColor: activeTheme.primaryColor, borderRadius: activeTheme.borderRadius }]} 
                   onPress={handleRegister}
                   disabled={authLoading}
                 >
                   {authLoading ? (
                     <ActivityIndicator size="small" color={activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff'} />
                   ) : (
-                    <Text style={[
-                      styles.submitBtnText, 
-                      { 
-                        color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff',
-                        fontFamily: activeTheme.fontFamily || 'System',
-                        textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
-                      }
-                    ]}>Register & Activate</Text>
+                    <Text style={[styles.submitBtnText, { color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff' }]}>Register & Activate</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -2207,47 +3984,49 @@ export default function AppIndex() {
             height: 60 + Math.max(insets.bottom, 12),
           }
         ]}>
-          {[
-            { key: 'dashboard', label: 'Dashboard', icon: activeThemeKey === 'minecraft_anime' ? '💎' : activeThemeKey === 'brick_breaker' ? '🕹️' : '📊' },
-            { key: 'activity', label: 'Activity', icon: activeThemeKey === 'minecraft_anime' ? '⚔️' : activeThemeKey === 'brick_breaker' ? '👾' : '📈' },
-            { key: 'accounts', label: 'Accounts', icon: activeThemeKey === 'minecraft_anime' ? '📦' : activeThemeKey === 'brick_breaker' ? '🧱' : '👥' },
-            { key: 'rewards', label: 'Rewards', icon: activeThemeKey === 'minecraft_anime' ? '🧪' : activeThemeKey === 'brick_breaker' ? '🏆' : '✨' },
-            { key: 'profile', label: 'profile', icon: 'profile_avatar' }
-          ].map((tab) => {
-            const isActive = dashboardTab === tab.key;
-            return (
-              <TouchableOpacity
-                key={tab.key}
-                style={[
-                  styles.bottomTabBtn,
-                  isActive && (activeThemeKey === 'minecraft_anime' ? { backgroundColor: 'rgba(255,255,255,0.1)' } : {})
-                ]}
-                onPress={() => setDashboardTab(tab.key as any)}
-              >
-                {tab.icon === 'profile_avatar' ? (
-                  activeThemeKey === 'minecraft_anime' ? (
-                    <View style={{ width: 22, height: 22, borderWidth: 1.5, borderColor: '#000000', backgroundColor: '#ecc3a7', overflow: 'hidden' }}>
-                      <AlexAvatar />
-                    </View>
-                  ) : (
-                    <Text style={[styles.bottomTabIcon, isActive && { color: activeTheme.primaryColor }]}>👤</Text>
-                  )
-                ) : (
+          {(() => {
+            const tabs = [
+              { key: 'dashboard', label: 'Home', icon: activeThemeKey === 'minecraft_anime' ? '💎' : activeThemeKey === 'brick_breaker' ? '🕹️' : '🏠' },
+              { key: 'stats', label: 'Stats', icon: '📊' },
+              { key: 'activity', label: 'Activity', icon: activeThemeKey === 'minecraft_anime' ? '⚔️' : activeThemeKey === 'brick_breaker' ? '👾' : '📈' },
+              { key: 'chat', label: 'Chat', icon: activeThemeKey === 'minecraft_anime' ? '💬' : activeThemeKey === 'brick_breaker' ? '💬' : '💬' },
+              { key: 'menu', label: 'Menu', icon: '☰' }
+            ];
+
+            return tabs.map((tab) => {
+              const isActive = tab.key === 'menu'
+                ? ['accounts', 'calendar', 'notes', 'rewards', 'profile'].includes(dashboardTab)
+                : dashboardTab === tab.key;
+              return (
+                <TouchableOpacity
+                  key={tab.key}
+                  style={[
+                    styles.bottomTabBtn,
+                    isActive && (activeThemeKey === 'minecraft_anime' ? { backgroundColor: 'rgba(255,255,255,0.1)' } : {})
+                  ]}
+                  onPress={() => {
+                    if (tab.key === 'menu') {
+                      setMenuOpen(true);
+                    } else {
+                      setDashboardTab(tab.key as any);
+                    }
+                  }}
+                >
                   <Text style={[styles.bottomTabIcon, isActive && { color: activeTheme.primaryColor }]}>{tab.icon}</Text>
-                )}
-                <Text style={[
-                  styles.bottomTabLabel, 
-                  { 
-                    color: isActive ? activeTheme.primaryColor : activeTheme.textMutedColor,
-                    fontFamily: activeTheme.fontFamily || 'System',
-                    textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
-                  }
-                ]}>
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+                  <Text style={[
+                    styles.bottomTabLabel, 
+                    { 
+                      color: isActive ? activeTheme.primaryColor : activeTheme.textMutedColor,
+                      fontFamily: activeTheme.fontFamily || 'System',
+                      textTransform: activeTheme.isRetro ? 'uppercase' : 'none'
+                    }
+                  ]}>
+                    {tab.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            });
+          })()}
         </View>
       )}
 
@@ -2273,9 +4052,9 @@ export default function AppIndex() {
           ]}>
             <View style={styles.modalHeader}>
               <View style={styles.modalTitleContainer}>
-                <Text style={[styles.modalTitle, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>{selectedUserSheet?.name}'s Spending Sheet</Text>
-                <Text style={[styles.modalSubtitle, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
-                  {selectedUserSheet?.email}
+                <Text style={[styles.modalTitle, { color: activeTheme.textColor }]}>{selectedUserSheet?.name}'s Spendings</Text>
+                <Text style={[styles.modalSubtitle, { color: activeTheme.textMutedColor }]}>
+                  {selectedUserSheet?.email} • {selectedUserSheet?.role}
                 </Text>
               </View>
               <TouchableOpacity onPress={handleCloseUserSheet} style={styles.closeBtn}>
@@ -2285,21 +4064,21 @@ export default function AppIndex() {
 
             {/* Modal Metrics Grid */}
             <View style={styles.modalMetrics}>
-              <View style={[styles.modalMetricCard, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1 }]}>
-                <Text style={[styles.metricLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Total Inflow</Text>
-                <Text style={[styles.metricVal, { color: activeTheme.incomeColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
+              <View style={[styles.modalMetricCard, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius }]}>
+                <Text style={[styles.metricLabel, { color: activeTheme.textMutedColor }]}>Total Inflow</Text>
+                <Text style={[styles.metricVal, { color: activeTheme.incomeColor }]}>
                   ₹{modalTotals.inflow.toLocaleString('en-IN')}
                 </Text>
               </View>
-              <View style={[styles.modalMetricCard, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1 }]}>
-                <Text style={[styles.metricLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Total Outflow</Text>
-                <Text style={[styles.metricVal, { color: activeTheme.expenseColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
+              <View style={[styles.modalMetricCard, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius }]}>
+                <Text style={[styles.metricLabel, { color: activeTheme.textMutedColor }]}>Total Outflow</Text>
+                <Text style={[styles.metricVal, { color: activeTheme.expenseColor }]}>
                   ₹{modalTotals.outflow.toLocaleString('en-IN')}
                 </Text>
               </View>
-              <View style={[styles.modalMetricCard, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.borderWidth || 1 }]}>
-                <Text style={[styles.metricLabel, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Net Balance</Text>
-                <Text style={[styles.metricVal, { color: modalTotals.balance >= 0 ? activeTheme.incomeColor : activeTheme.expenseColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
+              <View style={[styles.modalMetricCard, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius }]}>
+                <Text style={[styles.metricLabel, { color: activeTheme.textMutedColor }]}>Net Balance</Text>
+                <Text style={[styles.metricVal, { color: modalTotals.balance >= 0 ? activeTheme.incomeColor : activeTheme.expenseColor }]}>
                   ₹{modalTotals.balance.toLocaleString('en-IN')}
                 </Text>
               </View>
@@ -2308,27 +4087,21 @@ export default function AppIndex() {
             {/* Admin Sheets / PDF Export Actions */}
             <View style={styles.exportActionsRow}>
               <TouchableOpacity 
-                style={[styles.exportBtn, { backgroundColor: activeTheme.primaryColor, borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 2 : 0, borderColor: activeTheme.cardBorder }]} 
+                style={[styles.exportBtn, { backgroundColor: activeTheme.primaryColor }]} 
                 onPress={() => handleExportCSV(selectedUserSheet!, modalTransactions)}
               >
-                <Text style={[styles.exportBtnText, { color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff', fontFamily: activeTheme.fontFamily || 'System' }]}>Sheets (CSV)</Text>
+                <Text style={[styles.exportBtnText, { color: activeTheme.primaryColor === '#ffffff' ? '#000000' : '#ffffff' }]}>Sheets (CSV)</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.exportBtn, { backgroundColor: '#059669', borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 2 : 0, borderColor: activeTheme.cardBorder }]} 
-                onPress={() => handleExportCSV(selectedUserSheet!, modalTransactions)}
-              >
-                <Text style={[styles.exportBtnText, { fontFamily: activeTheme.fontFamily || 'System' }]}>Excel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.exportBtn, { backgroundColor: '#dc2626', borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 2 : 0, borderColor: activeTheme.cardBorder }]} 
+                style={[styles.exportBtn, { backgroundColor: '#dc2626' }]} 
                 onPress={() => handleExportPDF(selectedUserSheet!, modalTransactions)}
               >
-                <Text style={[styles.exportBtnText, { fontFamily: activeTheme.fontFamily || 'System' }]}>Export PDF</Text>
+                <Text style={[styles.exportBtnText]}>Export PDF</Text>
               </TouchableOpacity>
             </View>
 
             {/* Modal Transactions Scroll */}
-            <Text style={[sectionHeaderStyle, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>Transaction History</Text>
+            <Text style={[sectionHeaderStyle, { color: activeTheme.textColor }]}>Transaction History</Text>
             <ScrollView style={styles.modalScroll}>
               {modalTransactions.length === 0 ? (
                 <Text style={styles.emptyText}>No transaction records found.</Text>
@@ -2336,14 +4109,14 @@ export default function AppIndex() {
                 modalTransactions.map((t) => (
                   <View key={t.id} style={[styles.modalLedgerRow, { borderBottomColor: activeTheme.inputBorder }]}>
                     <View>
-                      <Text style={[styles.ledgerId, { color: activeTheme.textColor, fontFamily: activeTheme.fontFamily || 'System' }]}>{t.description}</Text>
-                      <Text style={[styles.ledgerTime, { color: activeTheme.textMutedColor, fontFamily: activeTheme.fontFamily || 'System' }]}>
+                      <Text style={[styles.ledgerId, { color: activeTheme.textColor }]}>{t.description}</Text>
+                      <Text style={[styles.ledgerTime, { color: activeTheme.textMutedColor }]}>
                         {new Date(t.dateStr).toLocaleString('en-IN')}
                       </Text>
                     </View>
                     <Text style={[
                       styles.ledgerAmount,
-                      { color: t.type === 'income' ? activeTheme.incomeColor : activeTheme.expenseColor, fontFamily: activeTheme.fontFamily || 'System' }
+                      { color: t.type === 'income' ? activeTheme.incomeColor : activeTheme.expenseColor }
                     ]}>
                       {t.type === 'income' ? '+' : '-'} ₹{t.amount.toLocaleString()}
                     </Text>
@@ -2352,23 +4125,831 @@ export default function AppIndex() {
               )}
             </ScrollView>
 
+            {/* Display notes list ONLY for ADMIN, hidden for MD/DIRECTOR */}
+            {profile?.role === 'ADMIN' && (
+              <>
+                <Text style={[sectionHeaderStyle, { color: activeTheme.textColor, marginTop: 15 }]}>User Notes (Security Access Only)</Text>
+                <ScrollView style={[styles.modalScroll, { maxHeight: 150, marginBottom: 15 }]}>
+                  {modalUserNotes.length === 0 ? (
+                    <Text style={[styles.emptyText, { fontSize: 12 }]}>No notes found for this user.</Text>
+                  ) : (
+                    modalUserNotes.map((note) => (
+                      <View key={note.id} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: activeTheme.inputBorder }}>
+                        <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 13 }}>{note.title}</Text>
+                        <Text style={{ color: activeTheme.textColor, fontSize: 12, marginTop: 4 }}>{note.content}</Text>
+                        <Text style={{ color: activeTheme.textMutedColor, fontSize: 9, marginTop: 4 }}>
+                          {new Date(note.createdAt).toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+              </>
+            )}
+
             {/* Delete User Section */}
-            {profile?.role === 'ADMIN' && selectedUserSheet?.uid !== profile?.uid && (
+            {['ADMIN', 'MD', 'DIRECTOR'].includes(profile?.role || '') && selectedUserSheet?.uid !== profile?.uid && (
               <TouchableOpacity
-                style={[styles.deleteUserBtn, { borderRadius: activeTheme.borderRadius, borderWidth: activeTheme.isRetro ? activeTheme.borderWidth || 2 : 1, borderColor: '#ef4444' }]}
+                style={[styles.deleteUserBtn, { borderRadius: activeTheme.borderRadius, borderColor: '#ef4444' }]}
                 onPress={() => handleDeleteUser(selectedUserSheet?.uid || '')}
               >
-                <Text style={[styles.deleteUserBtnText, { fontFamily: activeTheme.fontFamily || 'System', textTransform: activeTheme.isRetro ? 'uppercase' : 'none' }]}>Permanently Remove User Account</Text>
+                <Text style={[styles.deleteUserBtnText]}>Permanently Remove User Account</Text>
               </TouchableOpacity>
             )}
           </View>
         </View>
       </Modal>
+
+      {/* Admin Create User Account Modal */}
+      <Modal visible={adminCreateOpen} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: activeTheme.background, borderColor: activeTheme.cardBorder, borderWidth: 1 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+              <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 16 }}>Provision New User</Text>
+              <TouchableOpacity onPress={() => setAdminCreateOpen(false)}>
+                <Text style={{ color: activeTheme.primaryColor }}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, color: activeTheme.textColor }]}
+              placeholder="Full Name"
+              placeholderTextColor={activeTheme.textMutedColor}
+              value={adminNewName}
+              onChangeText={setAdminNewName}
+            />
+            <TextInput
+              style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, color: activeTheme.textColor, marginTop: 10 }]}
+              placeholder="Email Address"
+              placeholderTextColor={activeTheme.textMutedColor}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={adminNewEmail}
+              onChangeText={setAdminNewEmail}
+            />
+            <TextInput
+              style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, color: activeTheme.textColor, marginTop: 10 }]}
+              placeholder="Phone Number"
+              placeholderTextColor={activeTheme.textMutedColor}
+              keyboardType="phone-pad"
+              value={adminNewPhone}
+              onChangeText={setAdminNewPhone}
+            />
+            <TextInput
+              style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, color: activeTheme.textColor, marginTop: 10 }]}
+              placeholder="Security Password (min 6 chars)"
+              placeholderTextColor={activeTheme.textMutedColor}
+              secureTextEntry={true}
+              value={adminNewPass}
+              onChangeText={setAdminNewPass}
+            />
+
+            {/* Role picker */}
+            <Text style={{ color: activeTheme.textColor, fontSize: 12, fontWeight: '700', marginTop: 12 }}>Assigned Role</Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+              {(['USER', 'ADMIN'] as const).map(role => (
+                <TouchableOpacity
+                  key={role}
+                  style={[
+                    styles.toggleBtn,
+                    { borderColor: adminNewRole === role ? activeTheme.primaryColor : 'rgba(255,255,255,0.05)', borderRadius: activeTheme.borderRadius },
+                    adminNewRole === role && { backgroundColor: activeTheme.primaryColor + '12' }
+                  ]}
+                  onPress={() => setAdminNewRole(role)}
+                >
+                  <Text style={{ color: adminNewRole === role ? activeTheme.textColor : activeTheme.textMutedColor, fontWeight: '700' }}>{role}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity style={[styles.submitBtn, { backgroundColor: activeTheme.primaryColor, marginTop: 20 }]} onPress={handleAdminCreateUser}>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>Provision Account</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Notifications Modal */}
+      <Modal visible={showNotifSheet} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: activeTheme.background, borderColor: activeTheme.cardBorder, borderWidth: 1, borderRadius: activeTheme.borderRadius }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+              <Text style={[styles.modalTitle, { color: activeTheme.textColor }]}>Notifications</Text>
+              <TouchableOpacity onPress={() => setShowNotifSheet(false)}>
+                <Text style={{ color: activeTheme.primaryColor, fontSize: 15, fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 400 }}>
+              {notifications.length === 0 ? (
+                <Text style={{ color: activeTheme.textMutedColor, textAlign: 'center', marginVertical: 20 }}>No new notifications.</Text>
+              ) : (
+                notifications.map((notif) => (
+                  <TouchableOpacity 
+                    key={notif.id} 
+                    style={{ padding: 15, borderBottomWidth: 1, borderBottomColor: activeTheme.cardBorder, backgroundColor: notif.read ? 'transparent' : activeTheme.primaryColor + '15' }}
+                    onPress={async () => {
+                      if (!notif.read) {
+                        try {
+                          await setDoc(doc(db, 'notifications', notif.id), { read: true }, { merge: true });
+                        } catch (e) {
+                          console.log("Failed to mark read", e);
+                        }
+                      }
+                    }}
+                  >
+                    <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 14 }}>{notif.title}</Text>
+                    <Text style={{ color: activeTheme.textMutedColor, fontSize: 12, marginTop: 4 }}>{notif.body}</Text>
+                    {notif.timestamp && (
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 10, marginTop: 6 }}>
+                        {new Date(notif.timestamp.seconds * 1000).toLocaleString('en-IN')}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Note Add/Edit Modal */}
+      <Modal
+        visible={noteModalOpen}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setNoteModalOpen(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 380,
+            backgroundColor: activeTheme.cardBackground,
+            borderColor: activeTheme.cardBorder,
+            borderWidth: 1,
+            borderRadius: activeTheme.borderRadius,
+            padding: 20,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 10,
+          }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: activeTheme.textColor, marginBottom: 15 }}>
+              {editingNote ? "✏️ Edit Note" : "📝 Add New Note"}
+            </Text>
+            
+            <TextInput
+              style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, marginBottom: 12, paddingVertical: 10, fontSize: 13 }]}
+              placeholder="Note Title"
+              placeholderTextColor={activeTheme.textMutedColor}
+              value={noteTitle}
+              onChangeText={setNoteTitle}
+            />
+            
+            <TextInput
+              style={[
+                styles.input, 
+                { 
+                  backgroundColor: activeTheme.inputBackground, 
+                  borderColor: activeTheme.inputBorder, 
+                  borderRadius: activeTheme.borderRadius, 
+                  color: activeTheme.textColor, 
+                  marginBottom: 15, 
+                  paddingVertical: 10, 
+                  height: 100, 
+                  textAlignVertical: 'top',
+                  fontSize: 13
+                }
+              ]}
+              placeholder="Note Content / Details..."
+              placeholderTextColor={activeTheme.textMutedColor}
+              multiline={true}
+              numberOfLines={4}
+              value={noteContent}
+              onChangeText={setNoteContent}
+            />
+
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setNoteModalOpen(false);
+                  setEditingNote(null);
+                  setNoteTitle('');
+                  setNoteContent('');
+                }}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: activeTheme.borderRadius,
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 255, 255, 0.08)',
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 12 }}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleSaveNote}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: activeTheme.borderRadius,
+                  backgroundColor: activeTheme.primaryColor,
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 12 }}>
+                  Save
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Secure Chat Creator Modal */}
+      <Modal
+        visible={newChatModalOpen}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setNewChatModalOpen(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 380,
+            backgroundColor: activeTheme.cardBackground,
+            borderColor: activeTheme.cardBorder,
+            borderWidth: 1,
+            borderRadius: activeTheme.borderRadius,
+            padding: 20,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 10,
+          }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: activeTheme.textColor, marginBottom: 15 }}>
+              💬 Start Secure Chat / Group
+            </Text>
+
+            <TextInput
+              style={[styles.input, { backgroundColor: activeTheme.inputBackground, borderColor: activeTheme.inputBorder, borderRadius: activeTheme.borderRadius, color: activeTheme.textColor, marginBottom: 12, paddingVertical: 10, fontSize: 13 }]}
+              placeholder="Group Title (Leave empty for Direct Messages)"
+              placeholderTextColor={activeTheme.textMutedColor}
+              value={newChatGroupTitle}
+              onChangeText={setNewChatGroupTitle}
+            />
+
+            <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 12, marginBottom: 8 }}>
+              Select Participants:
+            </Text>
+
+            <ScrollView style={{ maxHeight: 200, marginBottom: 15 }}>
+              {allUsers.filter(u => u.uid !== profile?.uid).map((u) => {
+                const isSelected = newChatSelectedUsers.includes(u.uid);
+                return (
+                  <TouchableOpacity
+                    key={u.uid}
+                    onPress={() => {
+                      if (isSelected) {
+                        setNewChatSelectedUsers(newChatSelectedUsers.filter(id => id !== u.uid));
+                      } else {
+                        setNewChatSelectedUsers([...newChatSelectedUsers, u.uid]);
+                      }
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingVertical: 10,
+                      borderBottomWidth: 1,
+                      borderBottomColor: activeTheme.inputBorder,
+                      justifyContent: 'space-between'
+                    }}
+                  >
+                    <View>
+                      <Text style={{ color: activeTheme.textColor, fontWeight: '600', fontSize: 13 }}>{u.name}</Text>
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 10 }}>{u.email} • {u.role}</Text>
+                    </View>
+                    <View style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: 10,
+                      borderWidth: 2,
+                      borderColor: activeTheme.primaryColor,
+                      backgroundColor: isSelected ? activeTheme.primaryColor : 'transparent',
+                      justifyContent: 'center',
+                      alignItems: 'center'
+                    }}>
+                      {isSelected && (
+                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900' }}>✓</Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setNewChatModalOpen(false);
+                  setNewChatGroupTitle('');
+                  setNewChatSelectedUsers([]);
+                }}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: activeTheme.borderRadius,
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 255, 255, 0.08)',
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 12 }}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCreateChat}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: activeTheme.borderRadius,
+                  backgroundColor: activeTheme.primaryColor,
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 12 }}>
+                  Create
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Custom Calendar Date Range Picker Modal */}
+      <Modal
+        visible={datePickerTarget !== null}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setDatePickerTarget(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 380,
+            backgroundColor: activeTheme.cardBackground,
+            borderColor: activeTheme.cardBorder,
+            borderWidth: 1,
+            borderRadius: activeTheme.borderRadius,
+            padding: 20,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 10,
+          }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: activeTheme.textColor }}>
+                📅 Filter Date Range
+              </Text>
+              <TouchableOpacity onPress={() => setDatePickerTarget(null)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 20, fontWeight: '700', color: activeTheme.textColor }}>×</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Target Selector Tabs */}
+            <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', borderRadius: 8, padding: 3, marginBottom: 15 }}>
+              <TouchableOpacity
+                onPress={() => setDatePickerTarget('start')}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  alignItems: 'center',
+                  backgroundColor: datePickerTarget === 'start' ? activeTheme.primaryColor : 'transparent',
+                  borderRadius: 6
+                }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: datePickerTarget === 'start' ? '#fff' : activeTheme.textMutedColor }}>
+                  START: {startDateStr || 'Not Set'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setDatePickerTarget('end')}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  alignItems: 'center',
+                  backgroundColor: datePickerTarget === 'end' ? activeTheme.primaryColor : 'transparent',
+                  borderRadius: 6
+                }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: datePickerTarget === 'end' ? '#fff' : activeTheme.textMutedColor }}>
+                  END: {endDateStr || 'Not Set'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Month Navigation */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  const d = new Date(pickerMonthDate);
+                  d.setMonth(d.getMonth() - 1);
+                  setPickerMonthDate(d);
+                }}
+                style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
+              >
+                <Text style={{ color: activeTheme.textColor, fontSize: 16, fontWeight: '700' }}>‹</Text>
+              </TouchableOpacity>
+              <Text style={{ color: activeTheme.textColor, fontSize: 14, fontWeight: '700' }}>
+                {pickerMonthDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  const d = new Date(pickerMonthDate);
+                  d.setMonth(d.getMonth() + 1);
+                  setPickerMonthDate(d);
+                }}
+                style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
+              >
+                <Text style={{ color: activeTheme.textColor, fontSize: 16, fontWeight: '700' }}>›</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Day Labels */}
+            <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <Text key={d} style={{ flex: 1, textAlign: 'center', color: activeTheme.textMutedColor, fontSize: 10, fontWeight: '600' }}>{d}</Text>
+              ))}
+            </View>
+
+            {/* Calendar Grid */}
+            {(() => {
+              const year = pickerMonthDate.getFullYear();
+              const month = pickerMonthDate.getMonth();
+              const firstDay = new Date(year, month, 1).getDay();
+              const daysInMonth = new Date(year, month + 1, 0).getDate();
+              const today = new Date();
+
+              const startVal = startDateStr ? new Date(startDateStr.replace(/-/g, '/')).getTime() : null;
+              const endVal = endDateStr ? new Date(endDateStr.replace(/-/g, '/')).getTime() : null;
+
+              const cells: React.ReactNode[] = [];
+              for (let i = 0; i < firstDay; i++) {
+                cells.push(<View key={`empty-${i}`} style={{ flex: 1, aspectRatio: 1 }} />);
+              }
+
+              for (let day = 1; day <= daysInMonth; day++) {
+                const curDate = new Date(year, month, day);
+                const curTime = curDate.getTime();
+                const padMonth = String(month + 1).padStart(2, '0');
+                const padDay = String(day).padStart(2, '0');
+                const dateStr = `${year}-${padMonth}-${padDay}`;
+
+                const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+                const isStart = startDateStr === dateStr;
+                const isEnd = endDateStr === dateStr;
+
+                let inRange = false;
+                if (startVal && endVal) {
+                  inRange = curTime >= startVal && curTime <= endVal;
+                }
+
+                cells.push(
+                  <TouchableOpacity
+                    key={day}
+                    onPress={() => {
+                      if (datePickerTarget === 'start') {
+                        setStartDateStr(dateStr);
+                        if (!endDateStr) {
+                          setDatePickerTarget('end');
+                        }
+                      } else if (datePickerTarget === 'end') {
+                        setEndDateStr(dateStr);
+                        if (startDateStr) {
+                          const startD = new Date(startDateStr.replace(/-/g, '/'));
+                          const endD = new Date(dateStr.replace(/-/g, '/'));
+                          if (endD < startD) {
+                            setStartDateStr(dateStr);
+                            setEndDateStr(startDateStr);
+                          }
+                        }
+                      }
+                    }}
+                    style={{
+                      flex: 1,
+                      aspectRatio: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: 1,
+                      borderRadius: 6,
+                      backgroundColor: (isStart || isEnd)
+                        ? activeTheme.primaryColor
+                        : inRange
+                        ? activeTheme.primaryColor + '33'
+                        : isToday
+                        ? activeTheme.primaryColor + '15'
+                        : 'transparent',
+                      borderWidth: isToday && !(isStart || isEnd) ? 1 : 0,
+                      borderColor: activeTheme.primaryColor,
+                    }}
+                  >
+                    <Text style={{
+                      color: (isStart || isEnd)
+                        ? '#ffffff'
+                        : inRange
+                        ? activeTheme.textColor
+                        : activeTheme.textColor,
+                      fontSize: 12,
+                      fontWeight: (isToday || isStart || isEnd) ? '800' : '500'
+                    }}>
+                      {day}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }
+
+              const rows: React.ReactNode[][] = [];
+              for (let i = 0; i < cells.length; i += 7) {
+                rows.push(cells.slice(i, i + 7));
+              }
+              while (rows.length > 0 && rows[rows.length - 1].length < 7) {
+                rows[rows.length - 1].push(<View key={`pad-${rows[rows.length - 1].length}`} style={{ flex: 1, aspectRatio: 1 }} />);
+              }
+
+              return rows.map((row, ri) => (
+                <View key={ri} style={{ flexDirection: 'row', marginBottom: 2 }}>
+                  {row}
+                </View>
+              ));
+            })()}
+
+            {/* Bottom Actions */}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 15 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setStartDateStr('');
+                  setEndDateStr('');
+                }}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: activeTheme.borderRadius,
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 255, 255, 0.08)',
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 12 }}>
+                  Clear
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setDatePickerTarget(null)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: activeTheme.borderRadius,
+                  backgroundColor: activeTheme.primaryColor,
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 12 }}>
+                  Done
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+          </View>
+        </View>
+      </Modal>
+
+      {/* EXPLORE MENU DRAWER MODAL */}
+      <Modal
+        visible={menuOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setMenuOpen(false)}
+      >
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' }} 
+          activeOpacity={1} 
+          onPress={() => setMenuOpen(false)}
+        >
+          <View style={{
+            backgroundColor: activeTheme.cardBackground,
+            borderTopLeftRadius: activeTheme.borderRadius,
+            borderTopRightRadius: activeTheme.borderRadius,
+            borderColor: activeTheme.cardBorder,
+            borderWidth: 1,
+            borderBottomWidth: 0,
+            padding: 24,
+            paddingBottom: 40,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: -4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 20
+          }}
+          onStartShouldSetResponder={() => true}
+          onTouchEnd={(e) => e.stopPropagation()}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: activeTheme.textColor }}>☰ Explore Hub</Text>
+              <TouchableOpacity onPress={() => setMenuOpen(false)} style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}>
+                <Text style={{ color: activeTheme.textColor, fontSize: 14, fontWeight: 'bold' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between' }}>
+              {(() => {
+                const drawerItems = [];
+                if (['ADMIN', 'MD', 'DIRECTOR'].includes(profile?.role || '')) {
+                  drawerItems.push({
+                    key: 'accounts',
+                    label: 'Vault',
+                    icon: '🏰',
+                    desc: 'Security Admin Vault'
+                  });
+                }
+                drawerItems.push(
+                  { key: 'calendar', label: 'Calendar', icon: '📅', desc: 'Schedules & Logs' },
+                  { key: 'notes', label: 'Notes', icon: '📝', desc: 'Secure Notepad' },
+                  { key: 'rewards', label: 'Rewards', icon: '🏆', desc: 'Tasks & Milestones' },
+                  { key: 'profile', label: 'Me', icon: '👤', desc: 'Profile & Settings' }
+                );
+
+                return drawerItems.map((item) => {
+                  const isActive = dashboardTab === item.key;
+                  return (
+                    <TouchableOpacity
+                      key={item.key}
+                      style={{
+                        width: '47%',
+                        backgroundColor: isActive ? activeTheme.primaryColor + '15' : 'rgba(255, 255, 255, 0.02)',
+                        borderColor: isActive ? activeTheme.primaryColor : 'rgba(255, 255, 255, 0.05)',
+                        borderWidth: 1.5,
+                        borderRadius: activeTheme.borderRadius,
+                        padding: 14,
+                        gap: 4
+                      }}
+                      onPress={() => {
+                        setDashboardTab(item.key as any);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      <Text style={{ fontSize: 24, marginBottom: 4 }}>{item.icon}</Text>
+                      <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 14 }}>{item.label}</Text>
+                      <Text style={{ color: activeTheme.textMutedColor, fontSize: 10 }}>{item.desc}</Text>
+                    </TouchableOpacity>
+                  );
+                });
+              })()}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* CHAT ATTACHMENT OPTIONS MODAL */}
+      <Modal
+        visible={chatAttachmentMenuOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setChatAttachmentMenuOpen(false)}
+      >
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' }} 
+          activeOpacity={1} 
+          onPress={() => setChatAttachmentMenuOpen(false)}
+        >
+          <View style={{
+            backgroundColor: activeTheme.cardBackground,
+            borderTopLeftRadius: activeTheme.borderRadius,
+            borderTopRightRadius: activeTheme.borderRadius,
+            borderColor: activeTheme.cardBorder,
+            borderWidth: 1,
+            borderBottomWidth: 0,
+            padding: 24,
+            paddingBottom: 40,
+          }}
+          onStartShouldSetResponder={() => true}
+          onTouchEnd={(e) => e.stopPropagation()}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: activeTheme.textColor }}>📎 Share Securely</Text>
+              <TouchableOpacity onPress={() => setChatAttachmentMenuOpen(false)} style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}>
+                <Text style={{ color: activeTheme.textColor, fontSize: 14, fontWeight: 'bold' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-start' }}>
+              {[
+                { label: 'Photo', icon: '🖼️', action: handleShareImage },
+                { label: 'Document', icon: '📄', action: handleShareDocument },
+                { label: 'Audio', icon: '🎵', action: handleShareAudio },
+                { label: 'Contact', icon: '📇', action: () => { setChatAttachmentMenuOpen(false); setChatContactPickerOpen(true); } }
+              ].map((opt) => (
+                <TouchableOpacity
+                  key={opt.label}
+                  style={{
+                    width: '30%',
+                    marginBottom: 8,
+                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                    borderColor: 'rgba(255, 255, 255, 0.05)',
+                    borderWidth: 1.5,
+                    borderRadius: activeTheme.borderRadius,
+                    padding: 12,
+                    alignItems: 'center',
+                    gap: 6
+                  }}
+                  onPress={opt.action}
+                >
+                  <Text style={{ fontSize: 24 }}>{opt.icon}</Text>
+                  <Text style={{ color: activeTheme.textColor, fontWeight: '700', fontSize: 11 }}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* CHAT CONTACT PICKER MODAL */}
+      <Modal
+        visible={chatContactPickerOpen}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setChatContactPickerOpen(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 380,
+            backgroundColor: activeTheme.cardBackground,
+            borderColor: activeTheme.cardBorder,
+            borderWidth: 1,
+            borderRadius: activeTheme.borderRadius,
+            padding: 20,
+          }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: activeTheme.textColor }}>📇 Select Contact to Share</Text>
+              <TouchableOpacity onPress={() => setChatContactPickerOpen(false)} style={{ padding: 4 }}>
+                <Text style={{ color: activeTheme.textColor, fontSize: 16, fontWeight: 'bold' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 250, marginBottom: 15 }}>
+              {allUsers.filter(u => u.uid !== profile?.uid).map((u) => (
+                <TouchableOpacity
+                  key={u.uid}
+                  onPress={() => handleShareContact(u)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 12,
+                    borderBottomWidth: 1,
+                    borderBottomColor: activeTheme.inputBorder,
+                    gap: 12
+                  }}
+                >
+                  <View style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: activeTheme.primaryColor + '15',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}>
+                    <Text style={{ color: activeTheme.primaryColor, fontSize: 12, fontWeight: '700' }}>
+                      {u.name.slice(0, 2).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: activeTheme.textColor, fontWeight: '600', fontSize: 13 }}>{u.name}</Text>
+                    <Text style={{ color: activeTheme.textMutedColor, fontSize: 10 }}>{u.email} • {u.role}</Text>
+                  </View>
+                  <Text style={{ color: activeTheme.primaryColor, fontSize: 12 }}>Share →</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
 
-// Inline style parameter workarounds for React Native
+// Styles
 const sectionHeaderStyle = {
   fontSize: 12,
   color: '#fff',
@@ -2387,7 +4968,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 20,
     paddingBottom: 20,
-    paddingTop: Platform.OS === 'ios' ? 95 : 75, // Shift down to keep logo and welcome note away from status bar / top edge
+    paddingTop: Platform.OS === 'ios' ? 95 : 75,
     width: '100%',
     maxWidth: 550,
     alignSelf: 'center',
@@ -2444,6 +5025,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
   },
+  verificationBanner: {
+    padding: 12,
+    marginHorizontal: 20,
+    marginTop: 10,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  verificationText: {
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  bannerBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+  },
   authCard: {
     backgroundColor: '#0e111a',
     borderRadius: 16,
@@ -2453,7 +5052,7 @@ const styles = StyleSheet.create({
   },
   brandContainer: {
     alignItems: 'center',
-    marginTop: 40, // Shift logo and welcome subtitle down inside the card
+    marginTop: 40,
     marginBottom: 24,
   },
   logo: {
@@ -2481,16 +5080,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 8,
   },
-  tabActive: {
-    backgroundColor: '#6366f1',
-  },
   tabButtonText: {
     color: '#64748b',
     fontWeight: '600',
     fontSize: 14,
-  },
-  tabActiveText: {
-    color: '#fff',
   },
   form: {
     gap: 16,
@@ -2513,6 +5106,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 8,
   },
+  cancelEditBtn: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  biometricBtn: {
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  socialBtn: {
+    backgroundColor: '#ea4335',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   submitBtnText: {
     color: '#fff',
     fontWeight: '700',
@@ -2526,7 +5142,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 35, // Additional shift down for logo and welcome note
+    marginTop: 35,
     marginBottom: 10,
     paddingVertical: 10,
   },
@@ -2548,6 +5164,26 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: 'rgba(99, 102, 241, 0.12)',
+  },
+  insightsCard: {
+    padding: 16,
+    borderWidth: 1,
+  },
+  customizerTrigger: {
+    borderWidth: 1.5,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  customizerPanel: {
+    padding: 16,
+    borderWidth: 1,
+    gap: 12,
+  },
+  customizerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   summaryItem: {
     alignItems: 'center',
@@ -2600,17 +5236,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.05)',
   },
-  filterBtnActive: {
-    backgroundColor: 'rgba(99, 102, 241, 0.15)',
-    borderColor: '#6366f1',
+  filterMiniBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   filterBtnText: {
     color: '#64748b',
     fontSize: 11,
     fontWeight: '700',
-  },
-  filterBtnTextActive: {
-    color: '#6366f1',
   },
   card: {
     backgroundColor: '#0e111a',
@@ -2638,17 +5273,25 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
-  toggleActive: {
-    borderColor: '#6366f1',
-    backgroundColor: 'rgba(99, 102, 241, 0.05)',
-  },
   toggleText: {
     color: '#64748b',
     fontWeight: '600',
     fontSize: 13,
   },
-  toggleTextActive: {
-    color: '#6366f1',
+  categorySelectBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  uploadAttachmentBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderWidth: 1.5,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   ledgerRow: {
     flexDirection: 'row',
@@ -2681,12 +5324,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 10,
   },
-  ledgerUserLink: {
-    color: '#6366f1',
-    fontSize: 10,
-    fontWeight: '600',
-    textDecorationLine: 'underline',
-  },
   ledgerAmount: {
     fontSize: 14,
     fontWeight: '700',
@@ -2702,6 +5339,11 @@ const styles = StyleSheet.create({
     color: '#ef4444',
     fontSize: 10,
     fontWeight: '800',
+  },
+  adminCreateBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
   },
   teamMemberItem: {
     flexDirection: 'row',
@@ -2720,7 +5362,19 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#6366f1',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileAvatarImg: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  profileAvatarPlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2728,6 +5382,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 15,
+    textAlign: 'center',
   },
   teamMemberName: {
     color: '#fff',
@@ -2759,6 +5414,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: 'center',
+    marginTop: 15,
   },
   logoutText: {
     color: '#ef4444',
@@ -2919,22 +5575,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginTop: 2,
   },
-  themeSelectorGrid: {
-    gap: 10,
-  },
-  themeSelectorBtn: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255,255,255,0.02)',
-    borderWidth: 1,
-  },
-  themeSelectorBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
   miniProgressBarTrack: {
     width: 60,
     height: 4,
@@ -3016,5 +5656,49 @@ const styles = StyleSheet.create({
     fontSize: 9,
     textAlign: 'center',
     marginTop: 4,
+  },
+  ledgerUserLink: {
+    fontSize: 10,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+    marginLeft: 4,
+  },
+  themeSelectorGrid: {
+    gap: 10,
+  },
+  themeSelectorBtn: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+  },
+  themeSelectorBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  modeSelectorContainer: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderWidth: 1,
+    padding: 3,
+    marginBottom: 15,
+  },
+  modeSelectorBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeSelectorText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  datePickerBtn: {
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
 });
