@@ -31,45 +31,43 @@
   <style>
     /* Modern CSS Reset & Variable Tokens */
     :root {
-      --bg-base: #06070a;
-      --bg-surface: #0e111a;
-      --bg-card: rgba(18, 22, 35, 0.65);
-      --bg-card-hover: rgba(24, 29, 46, 0.85);
-      --border-color: rgba(255, 255, 255, 0.06);
-      --border-focus: #6366f1;
+      /* Deep Luminous Finance Theme */
+      --bg-base: #0a0e1a;
+      --bg-surface: #1b1f2c;
+      --bg-card: rgba(27, 31, 44, 0.5);
+      --bg-card-hover: rgba(38, 42, 55, 0.7);
+      --border-color: rgba(223, 226, 243, 0.1);
+      --border-focus: #7b41b3;
 
-      /* Neon/Fintech Colors */
-      --primary: #6366f1;
-      /* Glowing Purple-Blue */
-      --primary-hover: #4f46e5;
-      --primary-glow: rgba(99, 102, 241, 0.15);
+      /* Stitch Neon/Fintech Colors */
+      --primary: #7b41b3;
+      --primary-hover: #4a0080;
+      --primary-glow: rgba(123, 65, 179, 0.2);
 
-      --secondary: #00d4ff;
-      /* Mana Cyan */
-      --secondary-glow: rgba(0, 212, 255, 0.15);
+      --secondary: #39ff14;
+      /* Neon Green Success */
+      --secondary-glow: rgba(57, 255, 20, 0.15);
 
-      --accent: #10b981;
-      /* Emerald Success */
-      --accent-glow: rgba(16, 185, 129, 0.15);
+      --accent: #007bff;
+      /* Electric Blue Action */
+      --accent-glow: rgba(0, 123, 255, 0.15);
 
       --warning: #f59e0b;
-      /* Amber */
-      --danger: #ef4444;
-      /* Red */
+      --danger: #ffb4ab;
 
       /* Text Colors */
-      --text-main: #f3f4f6;
-      --text-secondary: #9ca3af;
-      --text-muted: #6b7280;
+      --text-main: #dfe2f3;
+      --text-secondary: #cec3d3;
+      --text-muted: #978d9d;
 
       --font-header: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
       --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
 
       --card-radius: 16px;
-      --input-radius: 10px;
+      --input-radius: 12px;
       --transition-speed: 0.3s;
       --shadow-glow:
-        0 8px 30px rgba(0, 0, 0, 0.5), 0 0 10px rgba(99, 102, 241, 0.05);
+        0 12px 40px rgba(0, 0, 0, 0.7), 0 0 15px rgba(123, 65, 179, 0.08);
     }
 
     * {
@@ -87,11 +85,11 @@
       min-height: 100vh;
       font-size: 14.5px;
       background-image:
-        radial-gradient(circle at 10% 20%,
-          rgba(99, 102, 241, 0.04) 0%,
+        radial-gradient(circle at 0% 0%,
+          rgba(123, 65, 179, 0.1) 0%,
           transparent 40%),
-        radial-gradient(circle at 90% 80%,
-          rgba(0, 212, 255, 0.04) 0%,
+        radial-gradient(circle at 100% 100%,
+          rgba(0, 123, 255, 0.08) 0%,
           transparent 40%);
       background-attachment: fixed;
     }
@@ -188,15 +186,17 @@
       border-radius: var(--card-radius);
       padding: 30px;
       box-shadow: var(--shadow-glow);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
       transition:
         border-color var(--transition-speed),
-        box-shadow var(--transition-speed);
+        box-shadow var(--transition-speed),
+        transform var(--transition-speed);
     }
 
     .panel:hover {
-      border-color: rgba(99, 102, 241, 0.15);
+      border-color: var(--primary-glow);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(123, 65, 179, 0.2);
     }
 
     .panel-title {
@@ -293,9 +293,9 @@
     input[type="text"]:focus {
       border-color: var(--border-focus);
       box-shadow:
-        0 0 10px rgba(99, 102, 241, 0.25),
-        inset 0 0 4px rgba(99, 102, 241, 0.1);
-      background-color: rgba(5, 7, 12, 0.95);
+        0 0 15px rgba(123, 65, 179, 0.25),
+        inset 0 0 4px rgba(123, 65, 179, 0.1);
+      background-color: var(--bg-surface);
     }
 
     /* Premium Toggles / Segmented Controls */
@@ -341,7 +341,7 @@
     .segmented-control input[type="radio"]:checked+label {
       color: #fff;
       background-color: var(--primary);
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 10px rgba(123, 65, 179, 0.3);
     }
 
     /* Quick selection tags */
@@ -365,7 +365,7 @@
     }
 
     .preset-badge:hover {
-      background-color: rgba(99, 102, 241, 0.1);
+      background-color: rgba(123, 65, 179, 0.1);
       border-color: var(--primary);
       color: #fff;
       transform: translateY(-1px);
@@ -435,12 +435,12 @@
     .info-box {
       display: flex;
       gap: 10px;
-      background: rgba(99, 102, 241, 0.05);
-      border: 1px solid rgba(99, 102, 241, 0.15);
+      background: rgba(123, 65, 179, 0.05);
+      border: 1px solid rgba(123, 65, 179, 0.15);
       border-radius: 10px;
       padding: 12px 16px;
       font-size: 0.8rem;
-      color: #c7d2fe;
+      color: #ddb7ff;
       align-items: flex-start;
     }
 
@@ -2052,14 +2052,16 @@
             <div class="form-group" style="flex: 1">
               <label for="licensorContact">Contact Number</label>
               <div class="input-wrapper">
-                <input type="text" id="licensorContact" placeholder="Phone No." oninput="calculateStampDuty()" style="padding-left: 14px" />
+                <input type="text" id="licensorContact" placeholder="Phone No." oninput="calculateStampDuty()"
+                  style="padding-left: 14px" />
               </div>
             </div>
           </div>
           <div class="form-group full-width" style="margin-top: 5px;">
             <label for="licensorAddress">Licensor Address</label>
             <div class="input-wrapper">
-              <input type="text" id="licensorAddress" placeholder="Complete Address" oninput="calculateStampDuty()" style="padding-left: 14px" />
+              <input type="text" id="licensorAddress" placeholder="Complete Address" oninput="calculateStampDuty()"
+                style="padding-left: 14px" />
             </div>
           </div>
 
@@ -2080,14 +2082,16 @@
             <div class="form-group" style="flex: 1">
               <label for="licenseeContact">Contact Number</label>
               <div class="input-wrapper">
-                <input type="text" id="licenseeContact" placeholder="Phone No." oninput="calculateStampDuty()" style="padding-left: 14px" />
+                <input type="text" id="licenseeContact" placeholder="Phone No." oninput="calculateStampDuty()"
+                  style="padding-left: 14px" />
               </div>
             </div>
           </div>
           <div class="form-group full-width" style="margin-top: 5px;">
             <label for="licenseeAddress">Licensee Address</label>
             <div class="input-wrapper">
-              <input type="text" id="licenseeAddress" placeholder="Complete Address" oninput="calculateStampDuty()" style="padding-left: 14px" />
+              <input type="text" id="licenseeAddress" placeholder="Complete Address" oninput="calculateStampDuty()"
+                style="padding-left: 14px" />
             </div>
           </div>
 
@@ -2096,13 +2100,15 @@
             <div class="form-group">
               <label for="witness1Details">Witness 1</label>
               <div class="input-wrapper">
-                <input type="text" id="witness1Details" placeholder="Name, Address, Aadhaar/PAN" style="padding-left: 14px" oninput="calculateStampDuty()" />
+                <input type="text" id="witness1Details" placeholder="Name, Address, Aadhaar/PAN"
+                  style="padding-left: 14px" oninput="calculateStampDuty()" />
               </div>
             </div>
             <div class="form-group">
               <label for="witness2Details">Witness 2</label>
               <div class="input-wrapper">
-                <input type="text" id="witness2Details" placeholder="Name, Address, Aadhaar/PAN" style="padding-left: 14px" oninput="calculateStampDuty()" />
+                <input type="text" id="witness2Details" placeholder="Name, Address, Aadhaar/PAN"
+                  style="padding-left: 14px" oninput="calculateStampDuty()" />
               </div>
             </div>
           </div>
@@ -2125,7 +2131,8 @@
             <div class="form-group" style="flex: 1;">
               <label for="propertyArea">Area (Sq.Ft)</label>
               <div class="input-wrapper">
-                <input type="text" id="propertyArea" placeholder="e.g., 650 sq.ft" style="padding-left: 14px" oninput="calculateStampDuty()" />
+                <input type="text" id="propertyArea" placeholder="e.g., 650 sq.ft" style="padding-left: 14px"
+                  oninput="calculateStampDuty()" />
               </div>
             </div>
           </div>
@@ -2201,7 +2208,8 @@
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>
                 </span>
-                <input type="number" id="lockinPeriod" placeholder="e.g., 6" min="0" value="0" oninput="calculateStampDuty()" />
+                <input type="number" id="lockinPeriod" placeholder="e.g., 6" min="0" value="0"
+                  oninput="calculateStampDuty()" />
               </div>
             </div>
 
@@ -2261,7 +2269,8 @@
             <div class="form-group" style="flex: 0.3;">
               <label>Heavy Deposit?</label>
               <div class="segmented-control">
-                <input type="radio" name="heavyDeposit" id="HeavyNo" value="No" checked onchange="toggleHeavyDeposit()" />
+                <input type="radio" name="heavyDeposit" id="HeavyNo" value="No" checked
+                  onchange="toggleHeavyDeposit()" />
                 <label for="HeavyNo">No</label>
                 <input type="radio" name="heavyDeposit" id="HeavyYes" value="Yes" onchange="toggleHeavyDeposit()" />
                 <label for="HeavyYes">Yes</label>
@@ -2270,7 +2279,8 @@
             <div class="form-group" id="heavyDepositDetailsContainer" style="display: none; flex: 0.7;">
               <label for="heavyDepositDetails">Payment Details</label>
               <div class="input-wrapper">
-                <input type="text" id="heavyDepositDetails" placeholder="Cheque No, Bank Name, Date, RTGS/NEFT" style="padding-left: 14px" oninput="calculateStampDuty()" />
+                <input type="text" id="heavyDepositDetails" placeholder="Cheque No, Bank Name, Date, RTGS/NEFT"
+                  style="padding-left: 14px" oninput="calculateStampDuty()" />
               </div>
             </div>
           </div>
@@ -2559,13 +2569,15 @@
                 <div class="form-group">
                   <label for="licensorDocs">Licensor Docs (Aadhaar/PAN)</label>
                   <div class="input-wrapper">
-                    <input type="text" id="licensorDocs" placeholder="Aadhaar No, PAN" style="padding-left: 14px" oninput="calculateStampDuty()" />
+                    <input type="text" id="licensorDocs" placeholder="Aadhaar No, PAN" style="padding-left: 14px"
+                      oninput="calculateStampDuty()" />
                   </div>
                 </div>
                 <div class="form-group">
                   <label for="licenseeDocs">Licensee Docs (Aadhaar/PAN)</label>
                   <div class="input-wrapper">
-                    <input type="text" id="licenseeDocs" placeholder="Aadhaar No, PAN" style="padding-left: 14px" oninput="calculateStampDuty()" />
+                    <input type="text" id="licenseeDocs" placeholder="Aadhaar No, PAN" style="padding-left: 14px"
+                      oninput="calculateStampDuty()" />
                   </div>
                 </div>
               </div>
@@ -2760,7 +2772,8 @@
             </div>
             <div style="display: flex; justify-content: space-between">
               <span style="color: var(--text-secondary)">Licensor Docs:</span>
-              <strong id="valReceiptLicensorDocs" style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
+              <strong id="valReceiptLicensorDocs"
+                style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 6px;">
               <span style="color: var(--text-secondary)">Licensee:</span>
@@ -2785,15 +2798,18 @@
             </div>
             <div style="display: flex; justify-content: space-between">
               <span style="color: var(--text-secondary)">Licensee Docs:</span>
-              <strong id="valReceiptLicenseeDocs" style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
+              <strong id="valReceiptLicenseeDocs"
+                style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
             </div>
             <div style="display: flex; justify-content: space-between">
               <span style="color: var(--text-secondary)">Witness 1:</span>
-              <strong id="valReceiptWitness1" style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
+              <strong id="valReceiptWitness1"
+                style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
             </div>
             <div style="display: flex; justify-content: space-between">
               <span style="color: var(--text-secondary)">Witness 2:</span>
-              <strong id="valReceiptWitness2" style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
+              <strong id="valReceiptWitness2"
+                style="color: #fff; text-align: right; max-width: 60%; font-size: 0.75rem">—</strong>
             </div>
             <div style="
                   display: flex;
@@ -2864,7 +2880,8 @@
                 padding: 15px 20px;
                 margin-bottom: 25px;
               ">
-            <div class="bill-item-label" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div class="bill-item-label"
+              style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
               <span style="font-weight: 600;">Documents Provided</span>
               <span class="bill-item-sub" id="valDocsList" style="
                     word-break: break-word;
@@ -2887,7 +2904,9 @@
             <div class="fee-item primary-fee">
               <div class="fee-item-label">
                 Stamp Duty <span class="hide-on-print">(0.25%)</span>
-                <span class="bill-item-sub" style="font-weight: normal; margin-top: 2px">Bombay Stamp Act Art. 36A<br><em style="font-size: 0.7rem; color: #a1a1aa">*Actual Stamp Duty may vary slightly in IGR</em></span>
+                <span class="bill-item-sub" style="font-weight: normal; margin-top: 2px">Bombay Stamp Act Art.
+                  36A<br><em style="font-size: 0.7rem; color: #a1a1aa">*Actual Stamp Duty may vary slightly in
+                    IGR</em></span>
               </div>
               <div class="fee-item-val" id="stmpduty">₹900/-</div>
             </div>
@@ -3928,14 +3947,14 @@
       const licensorContact = document.getElementById("licensorContact")?.value.trim() || "";
       const licensorAddress = document.getElementById("licensorAddress")?.value.trim() || "";
       const licensorDocs = document.getElementById("licensorDocs").value.trim();
-      
+
       const licenseeName = document.getElementById("licenseeName").value.trim();
       const licenseeContact = document.getElementById("licenseeContact")?.value.trim() || "";
       const licenseeAddress = document.getElementById("licenseeAddress")?.value.trim() || "";
       const licenseeDocs = document.getElementById("licenseeDocs").value.trim();
       const propertyAddress = document.getElementById("propertyAddress").value.trim();
       const propertyArea = document.getElementById("propertyArea").value.trim();
-      
+
       const isHeavyDeposit = document.getElementById("HeavyYes").checked;
       const heavyDepositDetails = document.getElementById("heavyDepositDetails").value.trim();
       const heavyDepositText = isHeavyDeposit ? (heavyDepositDetails || "Yes") : "No";
@@ -3951,7 +3970,7 @@
       document.getElementById("valReceiptLicensorContact").innerText = licensorContact || "—";
       document.getElementById("valReceiptLicensorAddress").innerText = licensorAddress || "—";
       document.getElementById("valReceiptLicensorDocs").innerText = licensorDocs || "—";
-      
+
       document.getElementById("valReceiptLicensee").innerText = licenseeName || "—";
       document.getElementById("valReceiptLicenseeContact").innerText = licenseeContact || "—";
       document.getElementById("valReceiptLicenseeAddress").innerText = licenseeAddress || "—";
@@ -4445,7 +4464,7 @@
 <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head>
   <meta charset="utf-8">
-  <title>Stamp Duty & Registration Estimate - admyproperty</title>
+  <title>Stamp Duty & Registration Estimate - ADCS</title>
   <style>
     body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #2d3748; padding: 20px; }
     .header-table { width: 100%; border: none; margin-bottom: 30px; }
@@ -4479,8 +4498,7 @@
   <table class="header-table">
     <tr>
       <td>
-        <div class="logo-title">admyproperty</div>
-        <div class="logo-subtitle">A BETTER WAY TO ADVERTISE YOUR PROPERTY</div>
+        <div class="logo-title">ADCS</div>
         <div class="doc-title">Agreement Cost Estimate</div>
         <div class="doc-subtitle">Maharashtra Leave & License (Bombay Stamp Act Art. 36A)</div>
       </td>
@@ -4629,7 +4647,7 @@
   ${uploadedDocsHtml}
 
   <div class="footer">
-    Generated via admyproperty.com Stamp Duty & Registration Fee Calculator.<br>
+    Generated via <a href="https://adcs.com" style="color: #2f855a; text-decoration: none; font-weight: bold;">ADCS</a> Stamp Duty & Registration Fee Calculator.<br>
     This estimate is subject to government rules and verification of original documents.
   </div>
 </body>
